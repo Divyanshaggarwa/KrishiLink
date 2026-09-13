@@ -1,19 +1,17 @@
-import Link from "next/link";
 import SiteHeader from "./SiteHeader";
-function LeafMark() {
-  return (
-    <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true">
-      <circle cx="16" cy="16" r="16" fill="#1B4D3E" />
-      <path d="M9 23C9 15 15 9 24 8c0 9-6 15-15 15z" fill="#A5D6A7" />
-    </svg>
-  );
-}
 
 const ROLE_LABEL: Record<string, string> = {
   farmer: "Farmer",
   buyer: "Buyer",
   pds_operator: "PDS Operator",
   admin: "Admin",
+};
+
+const ROLE_HOME: Record<string, string> = {
+  farmer: "/farmer",
+  buyer: "/buyer",
+  pds_operator: "/pds-operator",
+  admin: "/admin",
 };
 
 const NAV: Record<string, { href: string; label: string }[]> = {
@@ -59,10 +57,12 @@ export default function DashboardShell({
   children: React.ReactNode;
 }) {
   const nav = NAV[profile.role] || [];
+  const homeHref = ROLE_HOME[profile.role] || "/";
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-[#0F1F1A]">
-            <SiteHeader
+      <SiteHeader
+        logoHref={homeHref}
         nav={nav}
         right={
           <>

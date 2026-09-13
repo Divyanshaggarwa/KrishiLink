@@ -27,8 +27,6 @@ export async function createListingAction(
   const district = String(formData.get("district") || "").trim();
   const state = String(formData.get("state") || "").trim();
   const pincode = String(formData.get("pincode") || "").trim();
-  const fairLow = Number(formData.get("fair_price_low")) || null;
-  const fairHigh = Number(formData.get("fair_price_high")) || null;
   const qualityConf = Number(formData.get("quality_confidence")) || null;
   const photo = formData.get("photo") as File | null;
 
@@ -85,8 +83,6 @@ export async function createListingAction(
     quality_grade: grade,
     quality_confidence: qualityConf,
     expected_price_per_kg: expectedPrice,
-    fair_price_low: fairLow,
-    fair_price_high: fairHigh,
     district,
     state,
     pincode: pincode || null,

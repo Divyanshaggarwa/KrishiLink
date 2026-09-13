@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useState } from "react";
 import Image from "next/image";
 import { createListingAction, type ListingState } from "./actions";
-import { predictFairPrice, predictQuality } from "@/lib/ai";
+import { predictQuality } from "@/lib/ai";
 
 type Profile = {
   id: string;
@@ -19,7 +19,6 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
     null
   );
 
-  // Form state
   const [crop, setCrop] = useState("");
   const [variety, setVariety] = useState("");
   const [quantity, setQuantity] = useState("");
@@ -30,18 +29,12 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
   const [stateName, setStateName] = useState(profile.state || "");
   const [pincode, setPincode] = useState(profile.pincode || "");
 
-  // Photo + AI state
   const [photo, setPhoto] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [qualitySource, setQualitySource] = useState<"ai" | "mock" | null>(null);
   const [qualityConfidence, setQualityConfidence] = useState<number | null>(null);
-  const [fairLow, setFairLow] = useState<number | null>(null);
-  const [fairHigh, setFairHigh] = useState<number | null>(null);
-  const [fairFactors, setFairFactors] = useState<string[]>([]);
-  const [priceSource, setPriceSource] = useState<"ai" | "mock" | null>(null);
 
-  // Photo preview + auto AI quality grading
   useEffect(() => {
     if (!photo) {
       setPreviewUrl(null);
@@ -68,46 +61,8 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
     return () => URL.revokeObjectURL(url);
   }, [photo]);
 
-  // Fair price suggestion — runs when crop + grade + quantity + district are set
-  useEffect(() => {
-    const qty = Number(quantity);
-    if (!crop || !grade || !qty || qty <= 0 || !district) {
-      setFairLow(null);
-      setFairHigh(null);
-      return;
-    }
-
-    let cancelled = false;
-    (async () => {
-      const result = await predictFairPrice({
-        crop,
-        quality: grade,
-        quantityKg: qty,
-        district,
-        month: new Date().getMonth() + 1,
-      });
-      if (cancelled) return;
-      setFairLow(result.low);
-      setFairHigh(result.high);
-      setFairFactors(result.factors);
-      setPriceSource(result.source);
-      // Pre-fill expected price if empty
-      if (!expectedPrice) {
-        setExpectedPrice(result.mid.toFixed(2));
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [crop, grade, quantity, district]);
-
   return (
     <form action={formAction} className="space-y-8">
-      {/* HIDDEN FIELDS (controlled inputs must sync to native name=) */}
-      <input type="hidden" name="fair_price_low" value={fairLow ?? ""} />
-      <input type="hidden" name="fair_price_high" value={fairHigh ?? ""} />
       <input
         type="hidden"
         name="quality_confidence"
@@ -115,7 +70,6 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
       />
 
       <div className="grid gap-8 lg:grid-cols-[1.1fr_1fr]">
-        {/* ============ LEFT COLUMN ============ */}
         <div className="space-y-6">
           <Section title="Crop details">
             <div className="grid gap-5 md:grid-cols-2">
@@ -196,7 +150,7 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
 
           <Section title="Pricing">
             <Field
-              label="Expected price (₹/kg)"
+              label="Your expected price (₹/kg)"
               name="expected_price_per_kg"
               type="number"
               required
@@ -204,36 +158,13 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
               onChange={setExpectedPrice}
               placeholder="e.g. 24"
             />
-
-            {fairLow !== null && fairHigh !== null && (
-              <div className="rounded-2xl border border-[#C8E6C9] bg-[#EAF5EE] p-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-[10px] font-semibold uppercase tracking-widest text-[#2E7D32]">
-                    Fair Price AI
-                  </p>
-                  {priceSource === "mock" && (
-                    <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-[#C62828]">
-                      Indicative
-                    </span>
-                  )}
-                </div>
-                <p className="font-display mt-2 text-2xl font-extrabold text-[#1B4D3E]">
-                  ₹{fairLow.toFixed(2)} – ₹{fairHigh.toFixed(2)}
-                  <span className="ml-1 text-sm font-medium text-[#6B7A74]">
-                    /kg
-                  </span>
-                </p>
-                <ul className="mt-3 space-y-1 text-[11px] text-[#1B4D3E]/80">
-                  {fairFactors.map((f) => (
-                    <li key={f}>• {f}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            <p className="text-[11px] text-[#6B7A74]">
+              Fair Price AI will validate this against the buyer&apos;s bid and
+              live market data when a buyer places an offer.
+            </p>
           </Section>
         </div>
 
-        {/* ============ RIGHT COLUMN ============ */}
         <div className="space-y-6">
           <Section title="Photo">
             <label
@@ -283,9 +214,7 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
               </button>
             )}
             {aiBusy && (
-              <p className="text-xs text-[#6B7A74]">
-                Analyzing quality…
-              </p>
+              <p className="text-xs text-[#6B7A74]">Analyzing quality…</p>
             )}
           </Section>
 
@@ -335,8 +264,6 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
     </form>
   );
 }
-
-/* ============== SMALL HELPERS ============== */
 
 function Section({
   title,

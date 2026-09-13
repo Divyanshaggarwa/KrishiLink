@@ -37,7 +37,7 @@ export default async function LoginPage({
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-[#0F1F1A]">
-            <SiteHeader
+      <SiteHeader
         right={
           <Link
             href={`/signup/${role}`}

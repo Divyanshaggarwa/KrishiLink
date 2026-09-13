@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { loginAction, type LoginState } from "./actions";
 
 type UrlRole = "farmer" | "buyer" | "pds-operator" | "admin";
@@ -11,6 +11,8 @@ export default function LoginForm({ role }: { role: UrlRole }) {
     bound,
     null
   );
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
 
   return (
     <form action={formAction} className="space-y-5">
@@ -24,10 +26,13 @@ export default function LoginForm({ role }: { role: UrlRole }) {
           required
           placeholder="you@example.com or 9876543210"
           autoComplete="username"
+          value={identifier}
+          onChange={(e) => setIdentifier(e.target.value)}
           className="mt-1.5 w-full rounded-xl border border-[#E4EBE6] px-4 py-3 text-sm outline-none focus:border-[#2E7D32] focus:ring-2 focus:ring-[#EAF5EE]"
         />
         <p className="mt-1.5 text-[11px] text-[#6B7A74]">
-          You can sign in with either your email address or your registered mobile number.
+          You can sign in with either your email address or your registered
+          mobile number.
         </p>
       </div>
 
@@ -40,6 +45,8 @@ export default function LoginForm({ role }: { role: UrlRole }) {
           type="password"
           required
           autoComplete="current-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
           className="mt-1.5 w-full rounded-xl border border-[#E4EBE6] px-4 py-3 text-sm outline-none focus:border-[#2E7D32] focus:ring-2 focus:ring-[#EAF5EE]"
         />
       </div>
