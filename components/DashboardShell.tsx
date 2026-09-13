@@ -62,6 +62,7 @@ export default function DashboardShell({
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-[#0F1F1A]">
       <SiteHeader
+        showBack={false}
         logoHref={homeHref}
         nav={nav}
         right={

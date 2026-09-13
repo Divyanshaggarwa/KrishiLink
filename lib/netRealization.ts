@@ -93,3 +93,30 @@ export function haversineKm(
       Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(a));
 }
+
+/* ------------------------------------------------------------------------
+   Prototype distance estimate when we don't have lat/lng yet.
+   Same district → 25 km
+   Same state, different district → 90 km
+   Different state → 300 km
+   ------------------------------------------------------------------------ */
+export function estimateDistanceFromDistricts(
+  farmerDistrict: string | null,
+  farmerState: string | null,
+  buyerDistrict: string | null,
+  buyerState: string | null
+): number {
+  if (!farmerDistrict || !buyerDistrict) return 100;
+
+  const sameState =
+    !!farmerState &&
+    !!buyerState &&
+    farmerState.toLowerCase() === buyerState.toLowerCase();
+
+  const sameDistrict =
+    farmerDistrict.toLowerCase() === buyerDistrict.toLowerCase();
+
+  if (sameState && sameDistrict) return 25;
+  if (sameState) return 90;
+  return 300;
+}

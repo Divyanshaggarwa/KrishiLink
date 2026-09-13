@@ -4,7 +4,7 @@ import { useActionState, useEffect, useState } from "react";
 import Image from "next/image";
 import { createListingAction, type ListingState } from "./actions";
 import { predictQuality } from "@/lib/ai";
-
+import ButtonSpinner from "@/components/ButtonSpinner";
 type Profile = {
   id: string;
   full_name: string;
@@ -213,8 +213,11 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
                 Remove photo
               </button>
             )}
-            {aiBusy && (
-              <p className="text-xs text-[#6B7A74]">Analyzing quality…</p>
+                        {aiBusy && (
+              <div className="flex items-center gap-2 text-xs text-[#6B7A74]">
+                <ButtonSpinner size={12} />
+                Analyzing quality with AI…
+              </div>
             )}
           </Section>
 
@@ -252,13 +255,20 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
         </div>
       )}
 
-      <div className="flex justify-end gap-3 border-t border-[#E4EBE6] pt-6">
+            <div className="flex justify-end gap-3 border-t border-[#E4EBE6] pt-6">
         <button
           type="submit"
           disabled={isPending}
-          className="rounded-full bg-[#1B4D3E] px-8 py-3.5 text-sm font-medium text-white transition-transform hover:scale-[1.02] disabled:opacity-60"
+          className="flex items-center justify-center gap-2 rounded-full bg-[#1B4D3E] px-8 py-3.5 text-sm font-medium text-white transition-all hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-70"
         >
-          {isPending ? "Publishing…" : "Publish listing"}
+          {isPending ? (
+            <>
+              <ButtonSpinner />
+              Publishing your listing…
+            </>
+          ) : (
+            "Publish listing"
+          )}
         </button>
       </div>
     </form>

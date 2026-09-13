@@ -2,7 +2,7 @@
 
 import { useActionState, useState } from "react";
 import { signupAction, type SignupState } from "./actions";
-
+import ButtonSpinner from "@/components/ButtonSpinner";
 type UrlRole = "farmer" | "buyer" | "pds-operator" | "admin";
 
 type FormValues = {
@@ -284,12 +284,19 @@ export default function SignupForm({ role }: { role: UrlRole }) {
         </div>
       )}
 
-      <button
+            <button
         type="submit"
         disabled={isPending}
-        className="w-full rounded-full bg-[#1B4D3E] px-6 py-3.5 text-sm font-medium text-white transition-transform hover:scale-[1.01] disabled:opacity-60"
+        className="flex w-full items-center justify-center gap-2 rounded-full bg-[#1B4D3E] px-6 py-3.5 text-sm font-medium text-white transition-all hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-70"
       >
-        {isPending ? "Creating account…" : "Create account"}
+        {isPending ? (
+          <>
+            <ButtonSpinner />
+            Creating your account…
+          </>
+        ) : (
+          "Create account"
+        )}
       </button>
     </form>
   );

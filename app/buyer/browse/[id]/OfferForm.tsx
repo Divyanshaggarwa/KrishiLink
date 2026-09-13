@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useState } from "react";
 import { placeOfferAction, type OfferState } from "./actions";
 import { evaluateFairness, type FairnessResult } from "@/lib/ai";
-
+import ButtonSpinner from "@/components/ButtonSpinner";
 type Listing = {
   id: string;
   crop: string;
@@ -145,9 +145,10 @@ export default function OfferForm({ listing }: { listing: Listing }) {
           </div>
 
           {analyzing && !fairness ? (
-            <p className="mt-3 text-sm text-[#6B7A74]">
+            <div className="mt-3 flex items-center gap-2 text-sm text-[#6B7A74]">
+              <ButtonSpinner size={14} />
               Evaluating market parameters…
-            </p>
+            </div>
           ) : fairness ? (
             <>
               <p className="font-display mt-3 text-2xl font-extrabold text-[#1B4D3E]">
@@ -205,12 +206,19 @@ export default function OfferForm({ listing }: { listing: Listing }) {
         </div>
       )}
 
-      <button
+            <button
         type="submit"
         disabled={isPending}
-        className="w-full rounded-full bg-[#1B4D3E] px-6 py-3.5 text-sm font-medium text-white transition-transform hover:scale-[1.01] disabled:opacity-60"
+        className="flex w-full items-center justify-center gap-2 rounded-full bg-[#1B4D3E] px-6 py-3.5 text-sm font-medium text-white transition-all hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-70"
       >
-        {isPending ? "Placing offer…" : "Place offer"}
+        {isPending ? (
+          <>
+            <ButtonSpinner />
+            Placing your offer…
+          </>
+        ) : (
+          "Place offer"
+        )}
       </button>
     </form>
   );

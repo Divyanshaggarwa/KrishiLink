@@ -324,6 +324,7 @@ export default function Home() {
 
       {/* ================= HEADER ================= */}
             <SiteHeader
+        showBack={false}
         nav={[
           { href: "#problem", label: "The gap" },
           { href: "#features", label: "Features" },

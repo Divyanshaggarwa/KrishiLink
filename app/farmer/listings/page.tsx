@@ -52,7 +52,7 @@ export default async function MyListingsPage() {
                 <th className="p-4">Expected ₹/kg</th>
                 <th className="p-4">District</th>
                 <th className="p-4">Status</th>
-                <th className="p-4">Listed</th>
+                <th className="p-4 text-right">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -90,8 +90,13 @@ export default async function MyListingsPage() {
                   <td className="p-4">
                     <StatusBadge status={l.status} />
                   </td>
-                  <td className="p-4 text-[#6B7A74]">
-                    {new Date(l.created_at).toLocaleDateString()}
+                  <td className="p-4 text-right">
+                    <Link
+                      href="/farmer/offers"
+                      className="rounded-full bg-[#EAF5EE] px-3 py-1.5 text-xs font-medium text-[#1B4D3E] hover:bg-[#1B4D3E] hover:text-white transition-colors"
+                    >
+                      View offers →
+                    </Link>
                   </td>
                 </tr>
               ))}
