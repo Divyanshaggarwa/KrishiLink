@@ -18,6 +18,7 @@ export default async function AdminDashboard() {
   return (
     <DashboardShell
       profile={profile}
+      showBack={false}
       title="Platform overview"
       subtitle="Live analytics across the KrishiLink ecosystem."
     >

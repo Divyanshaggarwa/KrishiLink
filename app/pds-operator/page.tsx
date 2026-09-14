@@ -30,6 +30,7 @@ export default async function PDSDashboard() {
   return (
     <DashboardShell
       profile={profile}
+      showBack={false}
       title={`Welcome, ${profile.full_name.split(" ")[0]}`}
       subtitle={`Assisted access hub for ${
         profile.village || profile.district || "your village"

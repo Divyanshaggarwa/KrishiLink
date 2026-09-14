@@ -1,29 +1,31 @@
 import Link from "next/link";
+import Image from "next/image";
+
+// Your logo.png is 800×321 → aspect ratio ≈ 2.492
+const LOGO_ASPECT = 800 / 321;
 
 export default function Logo({
-  size = 36,
-  showText = true,
+  height = 40,
   href = "/",
   variant = "default",
 }: {
-  size?: number;
-  showText?: boolean;
+  height?: number;
   href?: string | null;
   variant?: "default" | "light";
 }) {
-  const inner = (
-    <span className="flex items-center gap-2.5">
-      <img src="/logo.png" alt="KrishiLink" width={size} height={size} className="shrink-0 object-contain" />
+  const width = Math.round(height * LOGO_ASPECT);
 
-      {showText && (
-        <span
-          className={`font-display text-xl font-bold tracking-tight ${
-            variant === "light" ? "text-white" : "text-[#0F1F1A]"
-          }`}
-        >
-          KrishiLink
-        </span>
-      )}
+  const inner = (
+    <span className="inline-flex items-center">
+      <Image
+        src="/logo.png"
+        alt="KrishiLink"
+        width={width}
+        height={height}
+        priority
+        className={`object-contain ${variant === "light" ? "brightness-0 invert" : ""}`}
+        style={{ height, width: "auto" }}
+      />
     </span>
   );
 
