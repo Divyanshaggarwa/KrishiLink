@@ -20,11 +20,13 @@ const NAV: Record<string, { href: string; label: string }[]> = {
     { href: "/farmer/list", label: "List produce" },
     { href: "/farmer/listings", label: "My listings" },
     { href: "/farmer/offers", label: "Offers received" },
+    { href: "/farmer/orders", label: "Orders" },
   ],
   buyer: [
     { href: "/buyer", label: "Overview" },
     { href: "/buyer/browse", label: "Browse produce" },
     { href: "/buyer/bids", label: "My bids" },
+    { href: "/buyer/orders", label: "Orders" },
   ],
   pds_operator: [
     { href: "/pds-operator", label: "Overview" },

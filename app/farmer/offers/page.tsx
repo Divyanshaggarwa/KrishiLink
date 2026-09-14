@@ -9,39 +9,10 @@ import {
   type QualityGrade,
 } from "@/lib/netRealization";
 
-type Row = {
-  offerId: string;
-  listingId: string;
-  crop: string;
-  quantityKg: number;
-  grade: QualityGrade;
-  farmerDistrict: string | null;
-  farmerState: string | null;
-  buyerName: string;
-  buyerDistrict: string | null;
-  buyerState: string | null;
-  buyerTrust: number;
-  pricePerKg: number;
-  offerQty: number;
-  pickupMode: string;
-  message: string | null;
-  createdAt: string;
-  status: string;
-  // computed
-  distanceKm: number;
-  transportCostPerKg: number;
-  transactionCostPerKg: number;
-  qualityDeduction: number;
-  netPerKg: number;
-  netTotal: number;
-  grossTotal: number;
-};
-
 export default async function OffersReceivedPage() {
   const profile = await requireRole(["farmer"]);
   const supabase = await createClient();
 
-  // 1. Farmer's listings
   const { data: listings } = await supabase
     .from("listings")
     .select("id, crop, quantity_kg, quality_grade, district, state, expected_price_per_kg, status")
@@ -66,7 +37,6 @@ export default async function OffersReceivedPage() {
   const listingMap = new Map(listings.map((l) => [l.id, l]));
   const listingIds = listings.map((l) => l.id);
 
-  // 2. Offers on those listings
   const { data: offers } = await supabase
     .from("offers")
     .select("id, listing_id, buyer_id, price_per_kg, quantity_kg, pickup_mode, message, status, created_at")
@@ -89,17 +59,16 @@ export default async function OffersReceivedPage() {
     );
   }
 
-  // 3. Buyer profiles for those offers
+  // Safe buyer info — no phone, no email
   const buyerIds = Array.from(new Set(offers.map((o) => o.buyer_id)));
   const { data: buyers } = await supabase
-    .from("profiles")
-    .select("id, full_name, district, state, trust_score")
+    .from("public_profiles")
+    .select("id, full_name, district, state, trust_score, business_name")
     .in("id", buyerIds);
 
   const buyerMap = new Map((buyers || []).map((b) => [b.id, b]));
 
-  // 4. Compute net realization per offer
-  const rows: Row[] = offers.map((o) => {
+  const rows = offers.map((o) => {
     const l = listingMap.get(o.listing_id)!;
     const b = buyerMap.get(o.buyer_id);
 
@@ -126,9 +95,8 @@ export default async function OffersReceivedPage() {
       crop: l.crop,
       quantityKg: l.quantity_kg,
       grade,
-      farmerDistrict: l.district,
-      farmerState: l.state,
       buyerName: b?.full_name ?? "Buyer",
+      buyerBusiness: b?.business_name ?? null,
       buyerDistrict: b?.district ?? null,
       buyerState: b?.state ?? null,
       buyerTrust: Number(b?.trust_score ?? 50),
@@ -144,19 +112,15 @@ export default async function OffersReceivedPage() {
       qualityDeduction: breakdown.qualityDeduction,
       netPerKg: breakdown.netRealizationPerKg,
       netTotal: breakdown.netAmount,
-      grossTotal: breakdown.grossAmount,
     };
   });
 
-  // Group by listing, sort each group by net realization desc
-  const grouped = new Map<string, Row[]>();
+  const grouped = new Map<string, typeof rows>();
   rows.forEach((r) => {
     if (!grouped.has(r.listingId)) grouped.set(r.listingId, []);
     grouped.get(r.listingId)!.push(r);
   });
-  grouped.forEach((arr) =>
-    arr.sort((a, b) => b.netPerKg - a.netPerKg)
-  );
+  grouped.forEach((arr) => arr.sort((a, b) => b.netPerKg - a.netPerKg));
 
   return (
     <DashboardShell
@@ -175,7 +139,6 @@ export default async function OffersReceivedPage() {
               key={listingId}
               className="rounded-[24px] border border-[#E4EBE6] bg-white"
             >
-              {/* Listing header */}
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E4EBE6] px-6 py-4">
                 <div>
                   <h2 className="font-display text-lg font-bold">
@@ -189,8 +152,7 @@ export default async function OffersReceivedPage() {
                   </h2>
                   <p className="mt-1 text-xs text-[#6B7A74]">
                     You asked ₹{l.expected_price_per_kg}/kg · {list.length}{" "}
-                    offer{list.length > 1 ? "s" : ""} · {l.district},{" "}
-                    {l.state}
+                    offer{list.length > 1 ? "s" : ""} · {l.district}, {l.state}
                   </p>
                 </div>
                 <span
@@ -206,7 +168,6 @@ export default async function OffersReceivedPage() {
                 </span>
               </div>
 
-              {/* Offers table */}
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[920px] text-sm">
                   <thead className="bg-[#F8F9FA] text-left text-[10px] uppercase tracking-wider text-[#6B7A74]">
@@ -230,7 +191,6 @@ export default async function OffersReceivedPage() {
                   <tbody>
                     {list.map((r, idx) => {
                       const isBest = idx === 0 && r.status === "pending";
-                      const delta = r.netPerKg - bestNet;
                       const isPending = r.status === "pending";
 
                       return (
@@ -246,11 +206,12 @@ export default async function OffersReceivedPage() {
                                 {r.buyerName.charAt(0).toUpperCase()}
                               </div>
                               <div>
-                                <p className="font-medium">{r.buyerName}</p>
+                                <p className="font-medium">
+                                  {r.buyerBusiness || r.buyerName}
+                                </p>
                                 <p className="text-[11px] text-[#6B7A74]">
                                   {r.buyerDistrict || "—"},{" "}
-                                  {r.buyerState || "—"} · Trust{" "}
-                                  {r.buyerTrust}
+                                  {r.buyerState || "—"} · Trust {r.buyerTrust}
                                 </p>
                               </div>
                               {isBest && (
@@ -280,11 +241,6 @@ export default async function OffersReceivedPage() {
                             <span className="font-display text-lg font-extrabold text-[#1B4D3E]">
                               ₹{r.netPerKg.toFixed(2)}
                             </span>
-                            {!isBest && isPending && (
-                              <span className="ml-2 text-[10px] font-medium text-[#6B7A74]">
-                                ({delta.toFixed(2)})
-                              </span>
-                            )}
                           </td>
                           <td className="px-4 py-4 font-semibold">
                             ₹{r.netTotal.toLocaleString("en-IN")}
@@ -314,14 +270,13 @@ export default async function OffersReceivedPage() {
                 </table>
               </div>
 
-              {/* Per-listing summary footer */}
               {list.some((r) => r.status === "pending") && (
                 <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-[#E4EBE6] bg-[#FAFCFA] px-6 py-3 text-xs text-[#6B7A74]">
                   <span>
                     <strong className="text-[#1B4D3E]">
                       Best net: ₹{bestNet.toFixed(2)}/kg
                     </strong>{" "}
-                    from {best.buyerName}
+                    from {best.buyerBusiness || best.buyerName}
                   </span>
                   <span>
                     Difference from worst: ₹
@@ -358,7 +313,7 @@ function EmptyState({
       <p className="mx-auto mt-2 max-w-md text-sm text-[#6B7A74]">{body}</p>
       <Link
         href={cta.href}
-        className="mt-6 inline-block rounded-full bg-[#1B4D3E] px-6 py-3 text-sm font-medium text-white transition-transform hover:scale-[1.02]"
+        className="mt-6 inline-block rounded-full bg-[#1B4D3E] px-6 py-3 text-sm font-medium text-white"
       >
         {cta.label}
       </Link>

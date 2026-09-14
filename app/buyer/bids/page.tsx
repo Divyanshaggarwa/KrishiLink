@@ -11,7 +11,7 @@ export default async function MyBidsPage() {
   const { data: offers } = await supabase
     .from("offers")
     .select(
-      "id, price_per_kg, quantity_kg, status, created_at, pickup_mode, message, listing:listings!inner(id, crop, quality_grade, district, state, photo_url, status)"
+      "id, price_per_kg, quantity_kg, status, created_at, pickup_mode, listing:listings!inner(id, crop, quality_grade, district, state, photo_url, status)"
     )
     .eq("buyer_id", profile.id)
     .order("created_at", { ascending: false });
@@ -28,10 +28,25 @@ export default async function MyBidsPage() {
   return (
     <DashboardShell
       profile={profile}
+      showBack={false}
       title="My bids"
       subtitle="Every offer you've placed — pending, accepted, and rejected."
     >
-      {/* Stats */}
+      {counts.accepted > 0 && (
+        <div className="mb-6 rounded-[24px] border border-[#A5D6A7] bg-[#EAF5EE] p-5">
+          <p className="text-sm font-semibold text-[#1B4D3E]">
+            🎉 {counts.accepted} of your offers {counts.accepted === 1 ? "was" : "were"} accepted
+          </p>
+          <p className="mt-1 text-xs text-[#1B4D3E]/80">
+            Head to{" "}
+            <Link href="/buyer/orders" className="font-semibold underline">
+              My orders
+            </Link>{" "}
+            to track delivery and payment.
+          </p>
+        </div>
+      )}
+
       <div className="grid gap-5 md:grid-cols-4">
         <Stat label="Total bids" value={counts.total} />
         <Stat label="Pending" value={counts.pending} accent="amber" />
@@ -39,21 +54,19 @@ export default async function MyBidsPage() {
         <Stat label="Rejected" value={counts.rejected} accent="red" />
       </div>
 
-      {/* Table */}
       <div className="mt-10">
         {safeOffers.length === 0 ? (
           <EmptyState />
         ) : (
           <div className="overflow-hidden rounded-[24px] border border-[#E4EBE6] bg-white">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[820px] text-sm">
+              <table className="w-full min-w-[920px] text-sm">
                 <thead className="bg-[#F8F9FA] text-left text-[10px] uppercase tracking-wider text-[#6B7A74]">
                   <tr>
                     <th className="px-6 py-3 font-medium">Listing</th>
                     <th className="px-4 py-3 font-medium">Your bid</th>
                     <th className="px-4 py-3 font-medium">Qty</th>
                     <th className="px-4 py-3 font-medium">Total</th>
-                    <th className="px-4 py-3 font-medium">Pickup</th>
                     <th className="px-4 py-3 font-medium">Placed</th>
                     <th className="px-6 py-3 font-medium text-right">Status</th>
                   </tr>
@@ -63,7 +76,8 @@ export default async function MyBidsPage() {
                     const l = Array.isArray(o.listing)
                       ? o.listing[0]
                       : o.listing;
-                    const total = Number(o.price_per_kg) * Number(o.quantity_kg);
+                    const total =
+                      Number(o.price_per_kg) * Number(o.quantity_kg);
 
                     return (
                       <tr
@@ -108,14 +122,23 @@ export default async function MyBidsPage() {
                         <td className="px-4 py-4 font-medium">
                           ₹{total.toLocaleString("en-IN")}
                         </td>
-                        <td className="px-4 py-4 text-[#6B7A74] capitalize">
-                          {o.pickup_mode}
-                        </td>
                         <td className="px-4 py-4 text-[#6B7A74]">
                           {new Date(o.created_at).toLocaleDateString()}
                         </td>
                         <td className="px-6 py-4 text-right">
-                          <StatusBadge status={o.status} />
+                          {o.status === "accepted" ? (
+                            <div className="flex items-center justify-end gap-2">
+                              <StatusBadge status={o.status} />
+                              <Link
+                                href="/buyer/orders"
+                                className="rounded-full bg-[#1B4D3E] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white hover:scale-105 transition-transform"
+                              >
+                                View order →
+                              </Link>
+                            </div>
+                          ) : (
+                            <StatusBadge status={o.status} />
+                          )}
                         </td>
                       </tr>
                     );
@@ -187,7 +210,7 @@ function EmptyState() {
       </p>
       <Link
         href="/buyer/browse"
-        className="mt-6 inline-block rounded-full bg-[#1B4D3E] px-6 py-3 text-sm font-medium text-white transition-transform hover:scale-[1.02]"
+        className="mt-6 inline-block rounded-full bg-[#1B4D3E] px-6 py-3 text-sm font-medium text-white"
       >
         Browse produce
       </Link>

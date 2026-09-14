@@ -64,7 +64,7 @@ export async function acceptOfferAction(
     .eq("status", "pending")
     .neq("id", offerId);
 
-  // Mark listing sold
+  // Mark listing as sold
   await supabase
     .from("listings")
     .update({ status: "sold" })
@@ -119,9 +119,24 @@ export async function acceptOfferAction(
     };
   }
 
+  // Notify the buyer
+  await supabase.from("notifications").insert({
+    user_id: offer.buyer_id,
+    kind: "offer_accepted",
+    title: `Your offer on ${listing.crop} was accepted`,
+    body: `${profile.full_name} accepted your ₹${offer.price_per_kg}/kg offer for ${offer.quantity_kg} kg.`,
+    link: "/buyer/orders",
+  });
+
+  // Revalidate both sides
   revalidatePath("/farmer/offers");
   revalidatePath("/farmer/listings");
+  revalidatePath("/farmer/orders");
   revalidatePath("/farmer");
+  revalidatePath("/buyer/bids");
+  revalidatePath("/buyer/orders");
+  revalidatePath("/buyer");
+
   return { ok: true };
 }
 
@@ -141,7 +156,7 @@ export async function rejectOfferAction(
 
   const { data: offer } = await supabase
     .from("offers")
-    .select("id, listing:listings!inner(farmer_id)")
+    .select("id, buyer_id, listing:listings!inner(farmer_id, crop)")
     .eq("id", offerId)
     .single();
 
@@ -160,6 +175,18 @@ export async function rejectOfferAction(
 
   if (error) return { error: error.message };
 
+  // Notify buyer
+  if (offer?.buyer_id) {
+    await supabase.from("notifications").insert({
+      user_id: offer.buyer_id,
+      kind: "offer_rejected",
+      title: `Your offer on ${listing.crop} was declined`,
+      body: "The farmer rejected this offer. You can place a new bid.",
+      link: "/buyer/bids",
+    });
+  }
+
   revalidatePath("/farmer/offers");
+  revalidatePath("/buyer/bids");
   return { ok: true };
 }
