@@ -43,6 +43,7 @@ export default function DashboardShell({
   profile,
   title,
   subtitle,
+  showBack = true,
   children,
 }: {
   profile: {
@@ -54,6 +55,7 @@ export default function DashboardShell({
   };
   title: string;
   subtitle?: string;
+  showBack?: boolean;
   children: React.ReactNode;
 }) {
   const nav = NAV[profile.role] || [];
@@ -62,7 +64,7 @@ export default function DashboardShell({
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-[#0F1F1A]">
       <SiteHeader
-        showBack={false}
+        showBack={showBack}
         logoHref={homeHref}
         nav={nav}
         right={

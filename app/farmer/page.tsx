@@ -32,6 +32,7 @@ export default async function FarmerDashboard() {
   return (
     <DashboardShell
       profile={profile}
+      showBack={false}
       title={`Welcome, ${profile.full_name.split(" ")[0]}`}
       subtitle="Your farm's marketplace dashboard."
     >

@@ -4,6 +4,7 @@ import { useActionState, useEffect, useState } from "react";
 import { placeOfferAction, type OfferState } from "./actions";
 import { evaluateFairness, type FairnessResult } from "@/lib/ai";
 import ButtonSpinner from "@/components/ButtonSpinner";
+import RealizationCard from "@/components/nre/RealizationCard";
 type Listing = {
   id: string;
   crop: string;
@@ -143,6 +144,14 @@ export default function OfferForm({ listing }: { listing: Listing }) {
               </span>
             )}
           </div>
+          {/* NEW: Net Realization breakdown */}
+              {Number(price) > 0 && (
+              <RealizationCard
+                listingId={listing.id}
+                offerPrice={Number(price)}
+                quantityKg={Number(qty) || listing.quantity_kg}
+              />
+            )}
 
           {analyzing && !fairness ? (
             <div className="mt-3 flex items-center gap-2 text-sm text-[#6B7A74]">
