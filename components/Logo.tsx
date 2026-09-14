@@ -1,11 +1,11 @@
 import Link from "next/link";
 import Image from "next/image";
 
-// Your logo.png is 800×321 → aspect ratio ≈ 2.492
+// Your logo.png is 800×321 → aspect ratio 2.492
 const LOGO_ASPECT = 800 / 321;
 
 export default function Logo({
-  height = 40,
+  height = 48,
   href = "/",
   variant = "default",
 }: {
@@ -16,15 +16,19 @@ export default function Logo({
   const width = Math.round(height * LOGO_ASPECT);
 
   const inner = (
-    <span className="inline-flex items-center">
+    <span
+      className="inline-flex items-center"
+      style={{ height, width }}
+    >
       <Image
         src="/logo.png"
         alt="KrishiLink"
         width={width}
         height={height}
         priority
-        className={`object-contain ${variant === "light" ? "brightness-0 invert" : ""}`}
-        style={{ height, width: "auto" }}
+        className={`h-full w-full object-contain ${
+          variant === "light" ? "brightness-0 invert" : ""
+        }`}
       />
     </span>
   );
@@ -32,7 +36,11 @@ export default function Logo({
   if (!href) return inner;
 
   return (
-    <Link href={href} aria-label="KrishiLink home" className="inline-flex">
+    <Link
+      href={href}
+      aria-label="KrishiLink home"
+      className="inline-flex items-center"
+    >
       {inner}
     </Link>
   );

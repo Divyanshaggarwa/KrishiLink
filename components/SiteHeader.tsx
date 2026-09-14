@@ -19,7 +19,7 @@ export default function SiteHeader({
         {/* Left cluster: back + logo */}
         <div className="flex items-center gap-3">
           {showBack && <BackButton />}
-          <Logo href={logoHref} height={36} />
+          <Logo href={logoHref} height={48} />
         </div>
 
         {/* Optional center nav */}
