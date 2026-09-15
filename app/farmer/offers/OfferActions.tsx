@@ -1,50 +1,14 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import {
-  acceptOfferAction,
-  rejectOfferAction,
-  type OfferActionResult,
-} from "./actions";
+import { rejectOfferAction, type OfferActionResult } from "./actions";
 import ButtonSpinner from "@/components/ButtonSpinner";
-
-export function AcceptButton({ offerId }: { offerId: string }) {
-  const [state, formAction, isPending] = useActionState<
-    OfferActionResult,
-    FormData
-  >(acceptOfferAction, null);
-
-  return (
-    <form action={formAction}>
-      <input type="hidden" name="offerId" value={offerId} />
-      <button
-        type="submit"
-        disabled={isPending}
-        className="flex items-center justify-center gap-2 whitespace-nowrap rounded-full bg-[#1B4D3E] px-4 py-2 text-xs font-semibold text-white transition-all hover:scale-[1.03] disabled:opacity-60"
-      >
-        {isPending ? (
-          <>
-            <ButtonSpinner size={12} /> Accepting…
-          </>
-        ) : (
-          "Accept deal"
-        )}
-      </button>
-      {state?.error && (
-        <p className="mt-1 max-w-[180px] text-[10px] text-[#C62828]">
-          {state.error}
-        </p>
-      )}
-    </form>
-  );
-}
 
 export function RejectButton({ offerId }: { offerId: string }) {
   const [state, formAction, isPending] = useActionState<
     OfferActionResult,
     FormData
   >(rejectOfferAction, null);
-
   const [confirm, setConfirm] = useState(false);
 
   if (!confirm) {

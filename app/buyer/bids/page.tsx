@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import Link from "next/link";
 import Image from "next/image";
 import { requireRole } from "@/lib/auth";
@@ -8,15 +10,26 @@ export default async function MyBidsPage() {
   const profile = await requireRole(["buyer"]);
   const supabase = await createClient();
 
+  // 1. Offers (no join)
   const { data: offers } = await supabase
     .from("offers")
-    .select(
-      "id, price_per_kg, quantity_kg, status, created_at, pickup_mode, listing:listings!inner(id, crop, quality_grade, district, state, photo_url, status)"
-    )
+    .select("id, listing_id, price_per_kg, quantity_kg, status, created_at, pickup_mode")
     .eq("buyer_id", profile.id)
     .order("created_at", { ascending: false });
 
   const safeOffers = offers || [];
+
+  // 2. Listings separately
+  const listingIds = Array.from(new Set(safeOffers.map((o) => o.listing_id)));
+  const { data: listings } =
+    listingIds.length > 0
+      ? await supabase
+          .from("listings")
+          .select("id, crop, quality_grade, district, state, photo_url, status")
+          .in("id", listingIds)
+      : { data: [] };
+
+  const listingMap = new Map((listings || []).map((l) => [l.id, l]));
 
   const counts = {
     pending: safeOffers.filter((o) => o.status === "pending").length,
@@ -35,7 +48,8 @@ export default async function MyBidsPage() {
       {counts.accepted > 0 && (
         <div className="mb-6 rounded-[24px] border border-[#A5D6A7] bg-[#EAF5EE] p-5">
           <p className="text-sm font-semibold text-[#1B4D3E]">
-            🎉 {counts.accepted} of your offers {counts.accepted === 1 ? "was" : "were"} accepted
+            {counts.accepted} of your offers{" "}
+            {counts.accepted === 1 ? "was" : "were"} accepted
           </p>
           <p className="mt-1 text-xs text-[#1B4D3E]/80">
             Head to{" "}
@@ -60,7 +74,7 @@ export default async function MyBidsPage() {
         ) : (
           <div className="overflow-hidden rounded-[24px] border border-[#E4EBE6] bg-white">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[920px] text-sm">
+              <table className="w-full min-w-[820px] text-sm">
                 <thead className="bg-[#F8F9FA] text-left text-[10px] uppercase tracking-wider text-[#6B7A74]">
                   <tr>
                     <th className="px-6 py-3 font-medium">Listing</th>
@@ -73,9 +87,7 @@ export default async function MyBidsPage() {
                 </thead>
                 <tbody>
                   {safeOffers.map((o) => {
-                    const l = Array.isArray(o.listing)
-                      ? o.listing[0]
-                      : o.listing;
+                    const l = listingMap.get(o.listing_id);
                     const total =
                       Number(o.price_per_kg) * Number(o.quantity_kg);
 
@@ -102,15 +114,10 @@ export default async function MyBidsPage() {
                               </div>
                             )}
                             <div>
-                              <Link
-                                href={`/buyer/browse/${l?.id}`}
-                                className="font-medium hover:text-[#2E7D32]"
-                              >
-                                {l?.crop}
-                              </Link>
+                              <p className="font-medium">{l?.crop ?? "—"}</p>
                               <p className="text-[11px] text-[#6B7A74]">
-                                Grade {l?.quality_grade} · {l?.district},{" "}
-                                {l?.state}
+                                Grade {l?.quality_grade ?? "—"} ·{" "}
+                                {l?.district ?? "—"}, {l?.state ?? "—"}
                               </p>
                             </div>
                           </div>
@@ -131,7 +138,7 @@ export default async function MyBidsPage() {
                               <StatusBadge status={o.status} />
                               <Link
                                 href="/buyer/orders"
-                                className="rounded-full bg-[#1B4D3E] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white hover:scale-105 transition-transform"
+                                className="rounded-full bg-[#1B4D3E] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white transition-transform hover:scale-105"
                               >
                                 View order →
                               </Link>

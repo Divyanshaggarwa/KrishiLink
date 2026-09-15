@@ -1,8 +1,11 @@
+export const dynamic = "force-dynamic";
+import BookCallButton from "./BookCallButton";
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import DashboardShell from "@/components/DashboardShell";
-import { AcceptButton, RejectButton } from "./OfferActions";
+import { RejectButton } from "./OfferActions";
+import AcceptModal from "./AcceptModal";
 import {
   calculateNetRealization,
   estimateDistanceFromDistricts,
@@ -13,6 +16,7 @@ export default async function OffersReceivedPage() {
   const profile = await requireRole(["farmer"]);
   const supabase = await createClient();
 
+  // 1. My listings
   const { data: listings } = await supabase
     .from("listings")
     .select("id, crop, quantity_kg, quality_grade, district, state, expected_price_per_kg, status")
@@ -37,6 +41,7 @@ export default async function OffersReceivedPage() {
   const listingMap = new Map(listings.map((l) => [l.id, l]));
   const listingIds = listings.map((l) => l.id);
 
+  // 2. Offers on those listings
   const { data: offers } = await supabase
     .from("offers")
     .select("id, listing_id, buyer_id, price_per_kg, quantity_kg, pickup_mode, message, status, created_at")
@@ -52,14 +57,14 @@ export default async function OffersReceivedPage() {
       >
         <EmptyState
           title="No offers yet"
-          body="Once a buyer places an offer on one of your listings, it will appear here — ranked by net realization."
+          body="Once a buyer places an offer, it will appear here — ranked by net realization."
           cta={{ href: "/farmer/listings", label: "View my listings" }}
         />
       </DashboardShell>
     );
   }
 
-  // Safe buyer info — no phone, no email
+  // 3. Buyers via public_profiles
   const buyerIds = Array.from(new Set(offers.map((o) => o.buyer_id)));
   const { data: buyers } = await supabase
     .from("public_profiles")
@@ -89,12 +94,13 @@ export default async function OffersReceivedPage() {
       grade
     );
 
-    return {
+        return {
       offerId: o.id,
       listingId: l.id,
       crop: l.crop,
       quantityKg: l.quantity_kg,
       grade,
+      buyerId: o.buyer_id,
       buyerName: b?.full_name ?? "Buyer",
       buyerBusiness: b?.business_name ?? null,
       buyerDistrict: b?.district ?? null,
@@ -103,8 +109,6 @@ export default async function OffersReceivedPage() {
       pricePerKg: Number(o.price_per_kg),
       offerQty: Number(o.quantity_kg),
       pickupMode: o.pickup_mode,
-      message: o.message,
-      createdAt: o.created_at,
       status: o.status,
       distanceKm: breakdown.distanceKm,
       transportCostPerKg: breakdown.transportCostPerKg,
@@ -126,7 +130,7 @@ export default async function OffersReceivedPage() {
     <DashboardShell
       profile={profile}
       title="Offers received"
-      subtitle="Every buyer offer ranked by NET REALIZATION — what actually reaches your hand after logistics and transaction costs."
+      subtitle="Every buyer offer ranked by NET REALIZATION — what actually reaches your hand."
     >
       <div className="space-y-10">
         {Array.from(grouped.entries()).map(([listingId, list]) => {
@@ -147,7 +151,7 @@ export default async function OffersReceivedPage() {
                       Grade {l.quality_grade ?? "—"}
                     </span>
                     <span className="ml-2 rounded-full bg-[#F8F9FA] px-2.5 py-0.5 text-xs font-medium text-[#6B7A74]">
-                      {l.quantity_kg} kg available
+                      {l.quantity_kg} kg
                     </span>
                   </h2>
                   <p className="mt-1 text-xs text-[#6B7A74]">
@@ -169,30 +173,25 @@ export default async function OffersReceivedPage() {
               </div>
 
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[920px] text-sm">
+                <table className="w-full min-w-[900px] text-sm">
                   <thead className="bg-[#F8F9FA] text-left text-[10px] uppercase tracking-wider text-[#6B7A74]">
                     <tr>
                       <th className="px-6 py-3 font-medium">Buyer</th>
-                      <th className="px-4 py-3 font-medium">Offer ₹/kg</th>
+                      <th className="px-4 py-3 font-medium">₹/kg</th>
                       <th className="px-4 py-3 font-medium">Qty</th>
-                      <th className="px-4 py-3 font-medium">Distance</th>
                       <th className="px-4 py-3 font-medium">− Transport</th>
                       <th className="px-4 py-3 font-medium">− Txn</th>
                       <th className="px-4 py-3 font-medium">− Quality</th>
                       <th className="px-4 py-3 font-medium text-[#1B4D3E]">
                         Net ₹/kg
                       </th>
-                      <th className="px-4 py-3 font-medium">Net total</th>
-                      <th className="px-6 py-3 font-medium text-right">
-                        Action
-                      </th>
+                      <th className="px-6 py-3 font-medium text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {list.map((r, idx) => {
                       const isBest = idx === 0 && r.status === "pending";
                       const isPending = r.status === "pending";
-
                       return (
                         <tr
                           key={r.offerId}
@@ -210,13 +209,13 @@ export default async function OffersReceivedPage() {
                                   {r.buyerBusiness || r.buyerName}
                                 </p>
                                 <p className="text-[11px] text-[#6B7A74]">
-                                  {r.buyerDistrict || "—"},{" "}
-                                  {r.buyerState || "—"} · Trust {r.buyerTrust}
+                                  {r.buyerDistrict ?? "—"}, {r.buyerState ?? "—"}{" "}
+                                  · Trust {r.buyerTrust}
                                 </p>
                               </div>
                               {isBest && (
-                                <span className="ml-1 rounded-full bg-[#1B4D3E] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white">
-                                  Best deal
+                                <span className="ml-1 rounded-full bg-[#1B4D3E] px-2 py-0.5 text-[9px] font-semibold uppercase text-white">
+                                  Best
                                 </span>
                               )}
                             </div>
@@ -225,9 +224,6 @@ export default async function OffersReceivedPage() {
                             ₹{r.pricePerKg.toFixed(2)}
                           </td>
                           <td className="px-4 py-4">{r.offerQty} kg</td>
-                          <td className="px-4 py-4 text-[#6B7A74]">
-                            {r.distanceKm} km
-                          </td>
                           <td className="px-4 py-4 text-[#C62828]">
                             −₹{r.transportCostPerKg.toFixed(2)}
                           </td>
@@ -242,18 +238,33 @@ export default async function OffersReceivedPage() {
                               ₹{r.netPerKg.toFixed(2)}
                             </span>
                           </td>
-                          <td className="px-4 py-4 font-semibold">
-                            ₹{r.netTotal.toLocaleString("en-IN")}
-                          </td>
-                          <td className="px-6 py-4">
+                                                  <td className="px-6 py-4">
                             {isPending ? (
                               <div className="flex items-center justify-end gap-2">
+                                <BookCallButton
+                                  offerId={r.offerId}
+                                  listingId={r.listingId}
+                                  receiverId={r.buyerId}
+                                  receiverName={r.buyerBusiness || r.buyerName}
+                                />
                                 <RejectButton offerId={r.offerId} />
-                                <AcceptButton offerId={r.offerId} />
+                                <AcceptModal
+                                  offerId={r.offerId}
+                                  buyerName={r.buyerBusiness || r.buyerName}
+                                  pricePerKg={r.pricePerKg}
+                                  offerQty={r.offerQty}
+                                  listingTotalQty={r.quantityKg}
+                                  netKrishilink={r.netPerKg}
+                                  netSelf={Number(
+                                    (r.pricePerKg - r.transactionCostPerKg - r.qualityDeduction).toFixed(2)
+                                  )}
+                                  pickupMode={r.pickupMode}
+                                  distanceKm={r.distanceKm}
+                                />
                               </div>
                             ) : (
                               <span
-                                className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-wide ${
+                                className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase ${
                                   r.status === "accepted"
                                     ? "bg-[#E3F2FD] text-[#1565C0]"
                                     : "bg-[#F5F5F5] text-[#6B7A74]"
@@ -271,21 +282,13 @@ export default async function OffersReceivedPage() {
               </div>
 
               {list.some((r) => r.status === "pending") && (
-                <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-[#E4EBE6] bg-[#FAFCFA] px-6 py-3 text-xs text-[#6B7A74]">
-                  <span>
-                    <strong className="text-[#1B4D3E]">
-                      Best net: ₹{bestNet.toFixed(2)}/kg
-                    </strong>{" "}
-                    from {best.buyerBusiness || best.buyerName}
-                  </span>
-                  <span>
-                    Difference from worst: ₹
-                    {(bestNet - list[list.length - 1].netPerKg).toFixed(2)}/kg
-                  </span>
-                  <span>
-                    On your full {l.quantity_kg} kg: ₹
-                    {(bestNet * l.quantity_kg).toLocaleString("en-IN")}
-                  </span>
+                <div className="border-t border-[#E4EBE6] bg-[#FAFCFA] px-6 py-3 text-xs text-[#6B7A74]">
+                  <strong className="text-[#1B4D3E]">
+                    Best net: ₹{bestNet.toFixed(2)}/kg
+                  </strong>{" "}
+                  from {best.buyerBusiness || best.buyerName} · Difference from
+                  worst: ₹
+                  {(bestNet - list[list.length - 1].netPerKg).toFixed(2)}/kg
                 </div>
               )}
             </section>
@@ -307,9 +310,7 @@ function EmptyState({
 }) {
   return (
     <div className="rounded-[24px] border border-[#E4EBE6] bg-white p-12 text-center">
-      <h3 className="font-display text-lg font-bold text-[#1B4D3E]">
-        {title}
-      </h3>
+      <h3 className="font-display text-lg font-bold text-[#1B4D3E]">{title}</h3>
       <p className="mx-auto mt-2 max-w-md text-sm text-[#6B7A74]">{body}</p>
       <Link
         href={cta.href}

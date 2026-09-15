@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
@@ -11,18 +13,31 @@ export default async function FarmerOrdersPage() {
   const { data: orders } = await supabase
     .from("transactions")
     .select(
-      "id, final_price_per_kg, quantity_kg, net_realization_per_kg, net_amount, gross_amount, logistics_cost_per_kg, transaction_cost_per_kg, distance_km, vehicle_type, status, created_at, buyer_id, listing:listings!inner(crop, quality_grade)"
+      "id, listing_id, offer_id, buyer_id, final_price_per_kg, quantity_kg, net_realization_per_kg, net_amount, gross_amount, logistics_cost_per_kg, transaction_cost_per_kg, distance_km, vehicle_type, status, created_at"
     )
     .eq("farmer_id", profile.id)
     .order("created_at", { ascending: false });
 
   const safeOrders = orders || [];
 
+  const listingIds = Array.from(new Set(safeOrders.map((o) => o.listing_id)));
+  const { data: listings } =
+    listingIds.length > 0
+      ? await supabase
+          .from("listings")
+          .select("id, crop, quality_grade")
+          .in("id", listingIds)
+      : { data: [] };
+  const listingMap = new Map((listings || []).map((l) => [l.id, l]));
+
   const buyerIds = Array.from(new Set(safeOrders.map((o) => o.buyer_id)));
-  const { data: buyers } = await supabase
-    .from("public_profiles")
-    .select("id, full_name, district, state, trust_score, business_name")
-    .in("id", buyerIds);
+  const { data: buyers } =
+    buyerIds.length > 0
+      ? await supabase
+          .from("public_profiles")
+          .select("id, full_name, district, state, trust_score, business_name")
+          .in("id", buyerIds)
+      : { data: [] };
   const buyerMap = new Map((buyers || []).map((b) => [b.id, b]));
 
   const totalEarnings = safeOrders
@@ -68,7 +83,7 @@ export default async function FarmerOrdersPage() {
           </div>
         ) : (
           safeOrders.map((o) => {
-            const l = Array.isArray(o.listing) ? o.listing[0] : o.listing;
+            const l = listingMap.get(o.listing_id);
             const b = buyerMap.get(o.buyer_id);
 
             return (
@@ -79,16 +94,19 @@ export default async function FarmerOrdersPage() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h3 className="font-display text-lg font-bold">
-                      {l?.crop}{" "}
-                      <span className="ml-1 rounded-full bg-[#EAF5EE] px-2 py-0.5 text-[10px] font-medium text-[#2E7D32]">
-                        Grade {l?.quality_grade ?? "—"}
-                      </span>
+                      {l?.crop ?? "Order"}{" "}
+                      {l?.quality_grade && (
+                        <span className="ml-1 rounded-full bg-[#EAF5EE] px-2 py-0.5 text-[10px] font-medium text-[#2E7D32]">
+                          Grade {l.quality_grade}
+                        </span>
+                      )}
                     </h3>
                     <p className="mt-1 text-xs text-[#6B7A74]">
                       Buyer:{" "}
-                      <strong>{b?.business_name || b?.full_name}</strong> ·{" "}
-                      {b?.district}, {b?.state} · {o.distance_km} km ·{" "}
-                      {o.vehicle_type}
+                      <strong>{b?.business_name || b?.full_name || "—"}</strong>
+                      {b?.district && ` · ${b.district}, ${b.state}`}
+                      {o.distance_km ? ` · ${o.distance_km} km` : ""}
+                      {o.vehicle_type ? ` · ${o.vehicle_type}` : ""}
                     </p>
                   </div>
                   <span className="text-xs text-[#6B7A74]">
@@ -118,9 +136,21 @@ export default async function FarmerOrdersPage() {
                   />
                 </div>
 
-                <div className="mt-5">
+                                <div className="mt-5">
                   <Timeline status={o.status} createdAt={o.created_at} />
                 </div>
+
+                                {o.status === "escrow_paid" && (
+                  <div className="mt-5 border-t border-[#E4EBE6] pt-5 text-xs text-[#6B7A74]">
+                    KrishiLink logistics will pick up your produce shortly.
+                  </div>
+                )}
+
+                {o.status === "in_transit" && (
+                  <div className="mt-5 border-t border-[#E4EBE6] pt-5 text-xs text-[#6B7A74]">
+                    Your produce is on the way.
+                  </div>
+                )}
               </div>
             );
           })

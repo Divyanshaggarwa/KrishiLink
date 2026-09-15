@@ -1,4 +1,5 @@
 import SiteHeader from "./SiteHeader";
+import RealtimeRefresher from "./RealtimeRefresher";
 
 const ROLE_LABEL: Record<string, string> = {
   farmer: "Farmer",
@@ -35,6 +36,8 @@ const NAV: Record<string, { href: string; label: string }[]> = {
   ],
   admin: [
     { href: "/admin", label: "Overview" },
+    { href: "/admin/orders", label: "Orders" },
+    { href: "/admin/fees", label: "Fees" },
     { href: "/admin/users", label: "Users" },
     { href: "/admin/listings", label: "Listings" },
     { href: "/admin/transactions", label: "Transactions" },
@@ -49,6 +52,7 @@ export default function DashboardShell({
   children,
 }: {
   profile: {
+    id?: string;
     full_name: string;
     role: string;
     district?: string | null;
@@ -65,12 +69,19 @@ export default function DashboardShell({
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-[#0F1F1A]">
+      {/* Invisible auto-refresh listener */}
+      <RealtimeRefresher userId={profile.id} />
+
       <SiteHeader
         showBack={showBack}
         logoHref={homeHref}
         nav={nav}
-        right={
+                right={
           <>
+            <span className="hidden items-center gap-1.5 rounded-full bg-[#EAF5EE] px-2.5 py-1 text-[10px] font-medium uppercase tracking-wide text-[#2E7D32] sm:inline-flex">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#2E7D32]" />
+              Live
+            </span>
             <div className="hidden text-right md:block">
               <p className="text-sm font-medium">{profile.full_name}</p>
               <p className="text-xs text-[#6B7A74]">

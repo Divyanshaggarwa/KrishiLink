@@ -7,6 +7,7 @@ import {
   estimateDistanceFromDistricts,
   estimateTransportCostPerKg,
   TRANSACTION_COST_PER_KG,
+  type TransportMode,
 } from "@/lib/netRealization";
 
 export type OfferActionResult = { error?: string; ok?: boolean } | null;
@@ -21,24 +22,25 @@ export async function acceptOfferAction(
   }
 
   const offerId = String(formData.get("offerId") || "");
+  const modeRaw = String(formData.get("transport_mode") || "krishilink");
+  const transportMode: TransportMode = modeRaw === "self" ? "self" : "krishilink";
+  const relistLeftover = formData.get("relist_leftover") === "on";
+
   if (!offerId) return { error: "Offer ID missing." };
 
   const supabase = await createClient();
 
-  const { data: offer, error: offerErr } = await supabase
+  const { data: offer } = await supabase
     .from("offers")
     .select(
-      "id, listing_id, buyer_id, price_per_kg, quantity_kg, status, listing:listings!inner(id, farmer_id, status, crop)"
+      "id, listing_id, buyer_id, price_per_kg, quantity_kg, status, listing:listings(id, farmer_id, status, crop, quantity_kg, quality_grade, district, state)"
     )
     .eq("id", offerId)
     .single();
 
-  if (offerErr || !offer) return { error: "Offer not found." };
+  if (!offer) return { error: "Offer not found." };
 
-  const listing = Array.isArray(offer.listing)
-    ? offer.listing[0]
-    : offer.listing;
-
+  const listing = Array.isArray(offer.listing) ? offer.listing[0] : offer.listing;
   if (!listing || listing.farmer_id !== profile.id) {
     return { error: "You don't own this listing." };
   }
@@ -48,40 +50,65 @@ export async function acceptOfferAction(
   if (offer.status !== "pending") {
     return { error: "This offer is no longer pending." };
   }
+  if (offer.quantity_kg > listing.quantity_kg) {
+    return { error: "Offer quantity exceeds available stock." };
+  }
 
   // Accept this offer
-  const { error: acceptErr } = await supabase
-    .from("offers")
-    .update({ status: "accepted" })
-    .eq("id", offerId);
-  if (acceptErr) return { error: acceptErr.message };
+  await supabase.from("offers").update({ status: "accepted" }).eq("id", offerId);
 
-  // Reject all other pending offers on same listing
-  await supabase
-    .from("offers")
-    .update({ status: "rejected" })
-    .eq("listing_id", listing.id)
-    .eq("status", "pending")
-    .neq("id", offerId);
+  const remaining = Number(listing.quantity_kg) - Number(offer.quantity_kg);
 
-  // Mark listing as sold
-  await supabase
-    .from("listings")
-    .update({ status: "sold" })
-    .eq("id", listing.id);
+  if (remaining <= 0) {
+    // Fully sold — reject other pending, mark listing sold
+    await supabase
+      .from("offers")
+      .update({ status: "rejected" })
+      .eq("listing_id", listing.id)
+      .eq("status", "pending")
+      .neq("id", offerId);
 
-  // Compute distance + cost
+    await supabase.from("listings").update({ status: "sold" }).eq("id", listing.id);
+  } else if (relistLeftover) {
+    // Partial + farmer chose to re-list → keep listing active, update qty
+    await supabase
+      .from("listings")
+      .update({ quantity_kg: remaining, status: "active" })
+      .eq("id", listing.id);
+
+    // Auto-reject other pending offers that exceed the new remaining
+    const { data: overOffers } = await supabase
+      .from("offers")
+      .select("id, quantity_kg")
+      .eq("listing_id", listing.id)
+      .eq("status", "pending");
+
+    const toReject = (overOffers || [])
+      .filter((o) => Number(o.quantity_kg) > remaining)
+      .map((o) => o.id);
+
+    if (toReject.length > 0) {
+      await supabase.from("offers").update({ status: "rejected" }).in("id", toReject);
+    }
+  } else {
+    // Partial + farmer declined to re-list → expire listing, reject others
+    await supabase
+      .from("listings")
+      .update({ status: "expired", quantity_kg: remaining })
+      .eq("id", listing.id);
+
+    await supabase
+      .from("offers")
+      .update({ status: "rejected" })
+      .eq("listing_id", listing.id)
+      .eq("status", "pending")
+      .neq("id", offerId);
+  }
+
+  // Distance + cost
   const [{ data: farmerProfile }, { data: buyerProfile }] = await Promise.all([
-    supabase
-      .from("profiles")
-      .select("district, state")
-      .eq("id", profile.id)
-      .single(),
-    supabase
-      .from("profiles")
-      .select("district, state")
-      .eq("id", offer.buyer_id)
-      .single(),
+    supabase.from("profiles").select("district, state").eq("id", profile.id).single(),
+    supabase.from("profiles").select("district, state").eq("id", offer.buyer_id).single(),
   ]);
 
   const distance = estimateDistanceFromDistricts(
@@ -91,13 +118,14 @@ export async function acceptOfferAction(
     buyerProfile?.state ?? null
   );
 
-  const transport = estimateTransportCostPerKg(distance, offer.quantity_kg);
+  const transport =
+    transportMode === "self" ? 0 : estimateTransportCostPerKg(distance, offer.quantity_kg);
   const txn = TRANSACTION_COST_PER_KG;
   const netPerKg = Number((offer.price_per_kg - transport - txn).toFixed(2));
   const gross = Number((offer.price_per_kg * offer.quantity_kg).toFixed(2));
   const net = Number((netPerKg * offer.quantity_kg).toFixed(2));
 
-  const { error: txnErr } = await supabase.from("transactions").insert({
+  await supabase.from("transactions").insert({
     listing_id: listing.id,
     offer_id: offerId,
     farmer_id: profile.id,
@@ -110,16 +138,10 @@ export async function acceptOfferAction(
     gross_amount: gross,
     net_amount: net,
     distance_km: distance,
+    transport_mode: transportMode,
     status: "escrow_pending",
   });
 
-  if (txnErr) {
-    return {
-      error: `Deal accepted, but transaction log failed: ${txnErr.message}`,
-    };
-  }
-
-  // Notify the buyer
   await supabase.from("notifications").insert({
     user_id: offer.buyer_id,
     kind: "offer_accepted",
@@ -128,13 +150,13 @@ export async function acceptOfferAction(
     link: "/buyer/orders",
   });
 
-  // Revalidate both sides
   revalidatePath("/farmer/offers");
   revalidatePath("/farmer/listings");
   revalidatePath("/farmer/orders");
   revalidatePath("/farmer");
   revalidatePath("/buyer/bids");
   revalidatePath("/buyer/orders");
+  revalidatePath("/buyer/browse");
   revalidatePath("/buyer");
 
   return { ok: true };
@@ -150,20 +172,15 @@ export async function rejectOfferAction(
   }
 
   const offerId = String(formData.get("offerId") || "");
-  if (!offerId) return { error: "Offer ID missing." };
-
   const supabase = await createClient();
 
   const { data: offer } = await supabase
     .from("offers")
-    .select("id, buyer_id, listing:listings!inner(farmer_id, crop)")
+    .select("id, buyer_id, listing:listings(farmer_id, crop)")
     .eq("id", offerId)
     .single();
 
-  const listing = Array.isArray(offer?.listing)
-    ? offer!.listing[0]
-    : offer?.listing;
-
+  const listing = Array.isArray(offer?.listing) ? offer!.listing[0] : offer?.listing;
   if (!listing || listing.farmer_id !== profile.id) {
     return { error: "You don't own this listing." };
   }
@@ -172,10 +189,8 @@ export async function rejectOfferAction(
     .from("offers")
     .update({ status: "rejected" })
     .eq("id", offerId);
-
   if (error) return { error: error.message };
 
-  // Notify buyer
   if (offer?.buyer_id) {
     await supabase.from("notifications").insert({
       user_id: offer.buyer_id,
@@ -185,6 +200,50 @@ export async function rejectOfferAction(
       link: "/buyer/bids",
     });
   }
+
+  revalidatePath("/farmer/offers");
+  revalidatePath("/buyer/bids");
+  return { ok: true };
+}
+
+export async function requestCallAction(
+  _prev: OfferActionResult,
+  formData: FormData
+): Promise<OfferActionResult> {
+  const profile = await getCurrentProfile();
+  if (!profile) return { error: "Not authenticated." };
+
+  const offerId = String(formData.get("offerId") || "");
+  const listingId = String(formData.get("listingId") || "");
+  const receiverId = String(formData.get("receiverId") || "");
+  const preferred = String(formData.get("preferred_time") || "");
+  const notes = String(formData.get("notes") || "").trim();
+
+  if (!offerId || !listingId || !receiverId) {
+    return { error: "Missing required fields." };
+  }
+
+  const supabase = await createClient();
+
+  const { error } = await supabase.from("call_requests").insert({
+    offer_id: offerId,
+    listing_id: listingId,
+    requester_id: profile.id,
+    receiver_id: receiverId,
+    preferred_time: preferred ? new Date(preferred).toISOString() : null,
+    notes: notes || null,
+    status: "pending",
+  });
+
+  if (error) return { error: error.message };
+
+  await supabase.from("notifications").insert({
+    user_id: receiverId,
+    kind: "call_request",
+    title: "New call request",
+    body: `${profile.full_name} wants to discuss your offer. Check Book a Call.`,
+    link: "/farmer/offers",
+  });
 
   revalidatePath("/farmer/offers");
   revalidatePath("/buyer/bids");

@@ -47,14 +47,19 @@ export function getQualityDeduction(grade: QualityGrade): number {
   return { A: 0, B: 0.5, C: 1.5 }[grade] ?? 0;
 }
 
+export type TransportMode = "krishilink" | "self";
+
 export function calculateNetRealization(
   offer: OfferInput,
-  grade: QualityGrade
+  grade: QualityGrade,
+  transportMode: TransportMode = "krishilink"
 ): NetRealizationBreakdown {
-  const transportCostPerKg = estimateTransportCostPerKg(
-    offer.distanceKm,
-    offer.quantityKg
-  );
+  // If farmer uses own vehicle → no transport cost deducted
+  const transportCostPerKg =
+    transportMode === "self"
+      ? 0
+      : estimateTransportCostPerKg(offer.distanceKm, offer.quantityKg);
+
   const transactionCostPerKg = TRANSACTION_COST_PER_KG;
   const qualityDeduction = getQualityDeduction(grade);
 
@@ -75,7 +80,6 @@ export function calculateNetRealization(
     distanceKm: Number(offer.distanceKm.toFixed(2)),
   };
 }
-
 /** Great-circle distance between two lat/lng points */
 export function haversineKm(
   lat1: number,
