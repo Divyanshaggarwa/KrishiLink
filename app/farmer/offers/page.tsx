@@ -1,11 +1,16 @@
 export const dynamic = "force-dynamic";
-import BookCallButton from "./BookCallButton";
+
+import { Fragment } from "react";
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import DashboardShell from "@/components/DashboardShell";
 import { RejectButton } from "./OfferActions";
 import AcceptModal from "./AcceptModal";
+import BookCallButton from "./BookCallButton";
+import FairBandCard from "@/components/nre/FairBandCard";
+import { computeFairBand } from "@/lib/nre/fairBand";
+import { loadMandiPrice } from "@/lib/nre/fetch-config";
 import {
   calculateNetRealization,
   estimateDistanceFromDistricts,
@@ -19,7 +24,9 @@ export default async function OffersReceivedPage() {
   // 1. My listings
   const { data: listings } = await supabase
     .from("listings")
-    .select("id, crop, quantity_kg, quality_grade, district, state, expected_price_per_kg, status")
+    .select(
+      "id, crop, quantity_kg, quality_grade, district, state, expected_price_per_kg, status"
+    )
     .eq("farmer_id", profile.id);
 
   if (!listings || listings.length === 0) {
@@ -41,10 +48,12 @@ export default async function OffersReceivedPage() {
   const listingMap = new Map(listings.map((l) => [l.id, l]));
   const listingIds = listings.map((l) => l.id);
 
-  // 2. Offers on those listings
+  // 2. Offers on my listings
   const { data: offers } = await supabase
     .from("offers")
-    .select("id, listing_id, buyer_id, price_per_kg, quantity_kg, pickup_mode, message, status, created_at")
+    .select(
+      "id, listing_id, buyer_id, price_per_kg, quantity_kg, pickup_mode, message, status, created_at"
+    )
     .in("listing_id", listingIds)
     .order("created_at", { ascending: false });
 
@@ -64,15 +73,23 @@ export default async function OffersReceivedPage() {
     );
   }
 
-  // 3. Buyers via public_profiles
+  // 3. Buyers via public_profiles (no contact info)
   const buyerIds = Array.from(new Set(offers.map((o) => o.buyer_id)));
   const { data: buyers } = await supabase
     .from("public_profiles")
     .select("id, full_name, district, state, trust_score, business_name")
     .in("id", buyerIds);
-
   const buyerMap = new Map((buyers || []).map((b) => [b.id, b]));
 
+  // 4. Mandi prices per crop (for fair band)
+  const crops = Array.from(new Set(listings.map((l) => l.crop)));
+  const mandiPrices: Record<string, number> = {};
+  for (const crop of crops) {
+    const m = await loadMandiPrice(crop);
+    if (m) mandiPrices[crop] = m.modal_price;
+  }
+
+  // 5. Build enriched rows
   const rows = offers.map((o) => {
     const l = listingMap.get(o.listing_id)!;
     const b = buyerMap.get(o.buyer_id);
@@ -94,13 +111,23 @@ export default async function OffersReceivedPage() {
       grade
     );
 
-        return {
+    const fairBand = computeFairBand({
+      farmerExpectedPrice: Number(l.expected_price_per_kg),
+      buyerBid: Number(o.price_per_kg),
+      mandiModalPrice: mandiPrices[l.crop] ?? null,
+      grade,
+      quantityKg: Number(o.quantity_kg),
+      distanceKm: distance,
+    });
+
+    return {
       offerId: o.id,
       listingId: l.id,
+      buyerId: o.buyer_id,
       crop: l.crop,
       quantityKg: l.quantity_kg,
+      expectedPricePerKg: Number(l.expected_price_per_kg),
       grade,
-      buyerId: o.buyer_id,
       buyerName: b?.full_name ?? "Buyer",
       buyerBusiness: b?.business_name ?? null,
       buyerDistrict: b?.district ?? null,
@@ -109,6 +136,7 @@ export default async function OffersReceivedPage() {
       pricePerKg: Number(o.price_per_kg),
       offerQty: Number(o.quantity_kg),
       pickupMode: o.pickup_mode,
+      message: o.message,
       status: o.status,
       distanceKm: breakdown.distanceKm,
       transportCostPerKg: breakdown.transportCostPerKg,
@@ -116,9 +144,11 @@ export default async function OffersReceivedPage() {
       qualityDeduction: breakdown.qualityDeduction,
       netPerKg: breakdown.netRealizationPerKg,
       netTotal: breakdown.netAmount,
+      fairBand,
     };
   });
 
+  // 6. Group by listing, sort each group by net/kg desc
   const grouped = new Map<string, typeof rows>();
   rows.forEach((r) => {
     if (!grouped.has(r.listingId)) grouped.set(r.listingId, []);
@@ -130,19 +160,21 @@ export default async function OffersReceivedPage() {
     <DashboardShell
       profile={profile}
       title="Offers received"
-      subtitle="Every buyer offer ranked by NET REALIZATION — what actually reaches your hand."
+      subtitle="Every buyer offer ranked by NET REALIZATION — what actually reaches your hand after logistics and transaction costs."
     >
       <div className="space-y-10">
         {Array.from(grouped.entries()).map(([listingId, list]) => {
           const l = listingMap.get(listingId)!;
           const best = list[0];
           const bestNet = best.netPerKg;
+          const worstNet = list[list.length - 1].netPerKg;
 
           return (
             <section
               key={listingId}
               className="rounded-[24px] border border-[#E4EBE6] bg-white"
             >
+              {/* Listing header */}
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E4EBE6] px-6 py-4">
                 <div>
                   <h2 className="font-display text-lg font-bold">
@@ -172,6 +204,7 @@ export default async function OffersReceivedPage() {
                 </span>
               </div>
 
+              {/* Table */}
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[900px] text-sm">
                   <thead className="bg-[#F8F9FA] text-left text-[10px] uppercase tracking-wider text-[#6B7A74]">
@@ -185,110 +218,162 @@ export default async function OffersReceivedPage() {
                       <th className="px-4 py-3 font-medium text-[#1B4D3E]">
                         Net ₹/kg
                       </th>
-                      <th className="px-6 py-3 font-medium text-right">Action</th>
+                      <th className="px-6 py-3 font-medium text-right">
+                        Action
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
                     {list.map((r, idx) => {
                       const isBest = idx === 0 && r.status === "pending";
                       const isPending = r.status === "pending";
+
                       return (
-                        <tr
-                          key={r.offerId}
-                          className={`border-t border-[#E4EBE6] ${
-                            isBest ? "bg-[#F4FBF5]" : ""
-                          } ${!isPending ? "opacity-70" : ""}`}
-                        >
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-2">
-                              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#EAF5EE] text-xs font-semibold text-[#1B4D3E]">
-                                {r.buyerName.charAt(0).toUpperCase()}
+                        <Fragment key={r.offerId}>
+                          <tr
+                            className={`border-t border-[#E4EBE6] ${
+                              isBest ? "bg-[#F4FBF5]" : ""
+                            } ${!isPending ? "opacity-70" : ""}`}
+                          >
+                            <td className="px-6 py-4">
+                              <div className="flex items-center gap-2">
+                                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#EAF5EE] text-xs font-semibold text-[#1B4D3E]">
+                                  {r.buyerName.charAt(0).toUpperCase()}
+                                </div>
+                                <div>
+                                  <p className="font-medium">
+                                    {r.buyerBusiness || r.buyerName}
+                                  </p>
+                                  <p className="text-[11px] text-[#6B7A74]">
+                                    {r.buyerDistrict ?? "—"},{" "}
+                                    {r.buyerState ?? "—"} · Trust{" "}
+                                    {r.buyerTrust}
+                                  </p>
+                                </div>
+                                {isBest && (
+                                  <span className="ml-1 rounded-full bg-[#1B4D3E] px-2 py-0.5 text-[9px] font-semibold uppercase text-white">
+                                    Best
+                                  </span>
+                                )}
                               </div>
-                              <div>
-                                <p className="font-medium">
-                                  {r.buyerBusiness || r.buyerName}
-                                </p>
-                                <p className="text-[11px] text-[#6B7A74]">
-                                  {r.buyerDistrict ?? "—"}, {r.buyerState ?? "—"}{" "}
-                                  · Trust {r.buyerTrust}
-                                </p>
-                              </div>
-                              {isBest && (
-                                <span className="ml-1 rounded-full bg-[#1B4D3E] px-2 py-0.5 text-[9px] font-semibold uppercase text-white">
-                                  Best
+                            </td>
+                            <td className="px-4 py-4 font-semibold">
+                              ₹{r.pricePerKg.toFixed(2)}
+                            </td>
+                            <td className="px-4 py-4">{r.offerQty} kg</td>
+                            <td className="px-4 py-4 text-[#C62828]">
+                              −₹{r.transportCostPerKg.toFixed(2)}
+                            </td>
+                            <td className="px-4 py-4 text-[#C62828]">
+                              −₹{r.transactionCostPerKg.toFixed(2)}
+                            </td>
+                            <td className="px-4 py-4 text-[#C62828]">
+                              −₹{r.qualityDeduction.toFixed(2)}
+                            </td>
+                            <td className="px-4 py-4">
+                              <span className="font-display text-lg font-extrabold text-[#1B4D3E]">
+                                ₹{r.netPerKg.toFixed(2)}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4">
+                              {isPending ? (
+                                <div className="flex items-center justify-end gap-2">
+                                  <BookCallButton
+                                    offerId={r.offerId}
+                                    listingId={r.listingId}
+                                    receiverId={r.buyerId}
+                                    receiverName={
+                                      r.buyerBusiness || r.buyerName
+                                    }
+                                  />
+                                  <RejectButton offerId={r.offerId} />
+                                  <AcceptModal
+                                    offerId={r.offerId}
+                                    buyerName={
+                                      r.buyerBusiness || r.buyerName
+                                    }
+                                    pricePerKg={r.pricePerKg}
+                                    offerQty={r.offerQty}
+                                    listingTotalQty={r.quantityKg}
+                                    netKrishilink={r.netPerKg}
+                                    netSelf={Number(
+                                      (
+                                        r.pricePerKg -
+                                        r.transactionCostPerKg -
+                                        r.qualityDeduction
+                                      ).toFixed(2)
+                                    )}
+                                    pickupMode={r.pickupMode}
+                                    distanceKm={r.distanceKm}
+                                  />
+                                </div>
+                              ) : (
+                                <span
+                                  className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase ${
+                                    r.status === "accepted"
+                                      ? "bg-[#E3F2FD] text-[#1565C0]"
+                                      : "bg-[#F5F5F5] text-[#6B7A74]"
+                                  }`}
+                                >
+                                  {r.status}
                                 </span>
                               )}
-                            </div>
-                          </td>
-                          <td className="px-4 py-4 font-semibold">
-                            ₹{r.pricePerKg.toFixed(2)}
-                          </td>
-                          <td className="px-4 py-4">{r.offerQty} kg</td>
-                          <td className="px-4 py-4 text-[#C62828]">
-                            −₹{r.transportCostPerKg.toFixed(2)}
-                          </td>
-                          <td className="px-4 py-4 text-[#C62828]">
-                            −₹{r.transactionCostPerKg.toFixed(2)}
-                          </td>
-                          <td className="px-4 py-4 text-[#C62828]">
-                            −₹{r.qualityDeduction.toFixed(2)}
-                          </td>
-                          <td className="px-4 py-4">
-                            <span className="font-display text-lg font-extrabold text-[#1B4D3E]">
-                              ₹{r.netPerKg.toFixed(2)}
-                            </span>
-                          </td>
-                                                  <td className="px-6 py-4">
-                            {isPending ? (
-                              <div className="flex items-center justify-end gap-2">
-                                <BookCallButton
-                                  offerId={r.offerId}
-                                  listingId={r.listingId}
-                                  receiverId={r.buyerId}
-                                  receiverName={r.buyerBusiness || r.buyerName}
-                                />
-                                <RejectButton offerId={r.offerId} />
-                                <AcceptModal
-                                  offerId={r.offerId}
-                                  buyerName={r.buyerBusiness || r.buyerName}
-                                  pricePerKg={r.pricePerKg}
-                                  offerQty={r.offerQty}
-                                  listingTotalQty={r.quantityKg}
-                                  netKrishilink={r.netPerKg}
-                                  netSelf={Number(
-                                    (r.pricePerKg - r.transactionCostPerKg - r.qualityDeduction).toFixed(2)
+                            </td>
+                          </tr>
+
+                          {/* Expandable fair band row */}
+                          <tr className="border-t-0">
+                            <td colSpan={8} className="px-6 pb-5 pt-0">
+                              <details>
+                                <summary className="cursor-pointer text-xs text-[#6B7A74] hover:text-[#1B4D3E]">
+                                  💡 See shared fair band and negotiation
+                                  anchor
+                                </summary>
+                                <div className="mt-3 grid gap-4 md:grid-cols-2">
+                                  <FairBandCard
+                                    band={r.fairBand}
+                                    farmerPrice={r.expectedPricePerKg}
+                                    buyerBid={r.pricePerKg}
+                                    perspective="farmer"
+                                  />
+                                  {r.message && (
+                                    <div className="rounded-2xl border border-[#E4EBE6] bg-white p-5">
+                                      <p className="text-[10px] font-semibold uppercase tracking-widest text-[#6B7A74]">
+                                        Message from buyer
+                                      </p>
+                                      <p className="mt-2 text-sm text-[#0F1F1A]">
+                                        “{r.message}”
+                                      </p>
+                                    </div>
                                   )}
-                                  pickupMode={r.pickupMode}
-                                  distanceKm={r.distanceKm}
-                                />
-                              </div>
-                            ) : (
-                              <span
-                                className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase ${
-                                  r.status === "accepted"
-                                    ? "bg-[#E3F2FD] text-[#1565C0]"
-                                    : "bg-[#F5F5F5] text-[#6B7A74]"
-                                }`}
-                              >
-                                {r.status}
-                              </span>
-                            )}
-                          </td>
-                        </tr>
+                                </div>
+                              </details>
+                            </td>
+                          </tr>
+                        </Fragment>
                       );
                     })}
                   </tbody>
                 </table>
               </div>
 
+              {/* Summary footer */}
               {list.some((r) => r.status === "pending") && (
-                <div className="border-t border-[#E4EBE6] bg-[#FAFCFA] px-6 py-3 text-xs text-[#6B7A74]">
-                  <strong className="text-[#1B4D3E]">
-                    Best net: ₹{bestNet.toFixed(2)}/kg
-                  </strong>{" "}
-                  from {best.buyerBusiness || best.buyerName} · Difference from
-                  worst: ₹
-                  {(bestNet - list[list.length - 1].netPerKg).toFixed(2)}/kg
+                <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-[#E4EBE6] bg-[#FAFCFA] px-6 py-3 text-xs text-[#6B7A74]">
+                  <span>
+                    <strong className="text-[#1B4D3E]">
+                      Best net: ₹{bestNet.toFixed(2)}/kg
+                    </strong>{" "}
+                    from {best.buyerBusiness || best.buyerName}
+                  </span>
+                  <span>
+                    Difference from worst: ₹
+                    {(bestNet - worstNet).toFixed(2)}/kg
+                  </span>
+                  <span>
+                    On your full {l.quantity_kg} kg: ₹
+                    {(bestNet * l.quantity_kg).toLocaleString("en-IN")}
+                  </span>
                 </div>
               )}
             </section>
@@ -310,7 +395,9 @@ function EmptyState({
 }) {
   return (
     <div className="rounded-[24px] border border-[#E4EBE6] bg-white p-12 text-center">
-      <h3 className="font-display text-lg font-bold text-[#1B4D3E]">{title}</h3>
+      <h3 className="font-display text-lg font-bold text-[#1B4D3E]">
+        {title}
+      </h3>
       <p className="mx-auto mt-2 max-w-md text-sm text-[#6B7A74]">{body}</p>
       <Link
         href={cta.href}

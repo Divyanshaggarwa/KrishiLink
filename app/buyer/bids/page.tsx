@@ -1,19 +1,26 @@
 export const dynamic = "force-dynamic";
 
+import { Fragment } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { requireRole } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import DashboardShell from "@/components/DashboardShell";
+import FairBandCard from "@/components/nre/FairBandCard";
+import { computeFairBand } from "@/lib/nre/fairBand";
+import { loadMandiPrice } from "@/lib/nre/fetch-config";
+import { estimateDistanceFromDistricts } from "@/lib/netRealization";
 
 export default async function MyBidsPage() {
   const profile = await requireRole(["buyer"]);
   const supabase = await createClient();
 
-  // 1. Offers (no join)
+  // 1. My offers (no join — resilient to RLS)
   const { data: offers } = await supabase
     .from("offers")
-    .select("id, listing_id, price_per_kg, quantity_kg, status, created_at, pickup_mode")
+    .select(
+      "id, listing_id, price_per_kg, quantity_kg, status, created_at, pickup_mode"
+    )
     .eq("buyer_id", profile.id)
     .order("created_at", { ascending: false });
 
@@ -25,12 +32,38 @@ export default async function MyBidsPage() {
     listingIds.length > 0
       ? await supabase
           .from("listings")
-          .select("id, crop, quality_grade, district, state, photo_url, status")
+          .select(
+            "id, crop, quality_grade, district, state, photo_url, status, farmer_id, expected_price_per_kg"
+          )
           .in("id", listingIds)
       : { data: [] };
 
   const listingMap = new Map((listings || []).map((l) => [l.id, l]));
 
+  // 3. Farmer districts for distance (via public_profiles)
+  const farmerIds = Array.from(
+    new Set((listings || []).map((l) => l.farmer_id).filter(Boolean))
+  ) as string[];
+
+  const { data: farmerProfiles } =
+    farmerIds.length > 0
+      ? await supabase
+          .from("public_profiles")
+          .select("id, district, state")
+          .in("id", farmerIds)
+      : { data: [] };
+
+  const farmerMap = new Map((farmerProfiles || []).map((f) => [f.id, f]));
+
+  // 4. Mandi prices per crop (for fair band)
+  const crops = Array.from(new Set((listings || []).map((l) => l.crop)));
+  const mandiPrices: Record<string, number> = {};
+  for (const crop of crops) {
+    const m = await loadMandiPrice(crop);
+    if (m) mandiPrices[crop] = m.modal_price;
+  }
+
+  // 5. Counts
   const counts = {
     pending: safeOffers.filter((o) => o.status === "pending").length,
     accepted: safeOffers.filter((o) => o.status === "accepted").length,
@@ -48,7 +81,7 @@ export default async function MyBidsPage() {
       {counts.accepted > 0 && (
         <div className="mb-6 rounded-[24px] border border-[#A5D6A7] bg-[#EAF5EE] p-5">
           <p className="text-sm font-semibold text-[#1B4D3E]">
-            {counts.accepted} of your offers{" "}
+            🎉 {counts.accepted} of your offers{" "}
             {counts.accepted === 1 ? "was" : "were"} accepted
           </p>
           <p className="mt-1 text-xs text-[#1B4D3E]/80">
@@ -61,6 +94,7 @@ export default async function MyBidsPage() {
         </div>
       )}
 
+      {/* Stats */}
       <div className="grid gap-5 md:grid-cols-4">
         <Stat label="Total bids" value={counts.total} />
         <Stat label="Pending" value={counts.pending} accent="amber" />
@@ -68,13 +102,14 @@ export default async function MyBidsPage() {
         <Stat label="Rejected" value={counts.rejected} accent="red" />
       </div>
 
+      {/* Table */}
       <div className="mt-10">
         {safeOffers.length === 0 ? (
           <EmptyState />
         ) : (
           <div className="overflow-hidden rounded-[24px] border border-[#E4EBE6] bg-white">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[820px] text-sm">
+              <table className="w-full min-w-[900px] text-sm">
                 <thead className="bg-[#F8F9FA] text-left text-[10px] uppercase tracking-wider text-[#6B7A74]">
                   <tr>
                     <th className="px-6 py-3 font-medium">Listing</th>
@@ -91,63 +126,121 @@ export default async function MyBidsPage() {
                     const total =
                       Number(o.price_per_kg) * Number(o.quantity_kg);
 
+                    // Compute fair band if we have enough data
+                    let band = null;
+                    if (
+                      l &&
+                      l.expected_price_per_kg &&
+                      l.quality_grade &&
+                      l.farmer_id
+                    ) {
+                      const farmer = farmerMap.get(l.farmer_id);
+                      const distance = estimateDistanceFromDistricts(
+                        l.district,
+                        l.state,
+                        profile.district ?? null,
+                        profile.state ?? null
+                      );
+
+                      band = computeFairBand({
+                        farmerExpectedPrice: Number(l.expected_price_per_kg),
+                        buyerBid: Number(o.price_per_kg),
+                        mandiModalPrice: mandiPrices[l.crop] ?? null,
+                        grade: l.quality_grade as "A" | "B" | "C",
+                        quantityKg: Number(o.quantity_kg),
+                        distanceKm: distance,
+                      });
+                    }
+
                     return (
-                      <tr
-                        key={o.id}
-                        className="border-t border-[#E4EBE6] hover:bg-[#FAFCFA]"
-                      >
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-3">
-                            {l?.photo_url ? (
-                              <div className="relative h-10 w-10 overflow-hidden rounded-lg">
-                                <Image
-                                  src={l.photo_url}
-                                  alt={l.crop}
-                                  fill
-                                  className="object-cover"
-                                  unoptimized
-                                />
+                      <Fragment key={o.id}>
+                        <tr className="border-t border-[#E4EBE6] hover:bg-[#FAFCFA]">
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                              {l?.photo_url ? (
+                                <div className="relative h-10 w-10 overflow-hidden rounded-lg">
+                                  <Image
+                                    src={l.photo_url}
+                                    alt={l.crop}
+                                    fill
+                                    className="object-cover"
+                                    unoptimized
+                                  />
+                                </div>
+                              ) : (
+                                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#EAF5EE] text-lg">
+                                  🌾
+                                </div>
+                              )}
+                              <div>
+                                <p className="font-medium">
+                                  {l?.crop ?? "—"}
+                                </p>
+                                <p className="text-[11px] text-[#6B7A74]">
+                                  Grade {l?.quality_grade ?? "—"} ·{" "}
+                                  {l?.district ?? "—"}, {l?.state ?? "—"}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-4 font-semibold">
+                            ₹{Number(o.price_per_kg).toFixed(2)}/kg
+                          </td>
+                          <td className="px-4 py-4">{o.quantity_kg} kg</td>
+                          <td className="px-4 py-4 font-medium">
+                            ₹{total.toLocaleString("en-IN")}
+                          </td>
+                          <td className="px-4 py-4 text-[#6B7A74]">
+                            {new Date(o.created_at).toLocaleDateString(
+                              "en-IN",
+                              {
+                                day: "numeric",
+                                month: "short",
+                                year: "numeric",
+                              }
+                            )}
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                            {o.status === "accepted" ? (
+                              <div className="flex items-center justify-end gap-2">
+                                <StatusBadge status={o.status} />
+                                <Link
+                                  href="/buyer/orders"
+                                  className="rounded-full bg-[#1B4D3E] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white transition-transform hover:scale-105"
+                                >
+                                  View order →
+                                </Link>
                               </div>
                             ) : (
-                              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#EAF5EE] text-lg">
-                                🌾
-                              </div>
-                            )}
-                            <div>
-                              <p className="font-medium">{l?.crop ?? "—"}</p>
-                              <p className="text-[11px] text-[#6B7A74]">
-                                Grade {l?.quality_grade ?? "—"} ·{" "}
-                                {l?.district ?? "—"}, {l?.state ?? "—"}
-                              </p>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-4 py-4 font-semibold">
-                          ₹{Number(o.price_per_kg).toFixed(2)}/kg
-                        </td>
-                        <td className="px-4 py-4">{o.quantity_kg} kg</td>
-                        <td className="px-4 py-4 font-medium">
-                          ₹{total.toLocaleString("en-IN")}
-                        </td>
-                        <td className="px-4 py-4 text-[#6B7A74]">
-                          {new Date(o.created_at).toLocaleDateString()}
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          {o.status === "accepted" ? (
-                            <div className="flex items-center justify-end gap-2">
                               <StatusBadge status={o.status} />
-                              <Link
-                                href="/buyer/orders"
-                                className="rounded-full bg-[#1B4D3E] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white transition-transform hover:scale-105"
-                              >
-                                View order →
-                              </Link>
-                            </div>
-                          ) : (
-                            <StatusBadge status={o.status} />
-                          )}
-                        </td>
-                      </tr>
+                            )}
+                          </td>
+                        </tr>
+
+                        {/* Expandable fair band row */}
+                        {band && (
+                          <tr className="border-t-0">
+                            <td colSpan={6} className="px-6 pb-5 pt-0">
+                              <details>
+                                <summary className="cursor-pointer text-xs text-[#6B7A74] hover:text-[#1B4D3E]">
+                                  💡 See shared fair band and negotiation
+                                  anchor
+                                </summary>
+                                <div className="mt-3">
+                                  <FairBandCard
+                                    band={band}
+                                    farmerPrice={Number(
+                                      l?.expected_price_per_kg ?? 0
+                                    )}
+                                    buyerBid={Number(o.price_per_kg)}
+                                    perspective="buyer"
+                                  />
+                                </div>
+                              </details>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     );
                   })}
                 </tbody>
@@ -159,6 +252,8 @@ export default async function MyBidsPage() {
     </DashboardShell>
   );
 }
+
+/* ---------- Helpers ---------- */
 
 function Stat({
   label,
