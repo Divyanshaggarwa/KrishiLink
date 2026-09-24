@@ -334,6 +334,12 @@ export default function Home() {
         right={
           <>
             <Link
+              href="/ivr-sim"
+              className="hidden rounded-full px-3 py-1.5 text-xs font-medium text-[#6B7A74] transition-colors hover:text-[#1B4D3E] sm:inline"
+            >
+              📞 Try IVR
+            </Link>
+            <Link
               href="/login"
               className="rounded-full px-4 py-1.5 text-sm font-medium text-[#1B4D3E] transition-colors hover:bg-[#EAF5EE]"
             >

@@ -76,6 +76,7 @@ export default function DashboardShell({
         showBack={showBack}
         logoHref={homeHref}
         nav={nav}
+        userId={profile.id}
                 right={
           <>
             <span className="hidden items-center gap-1.5 rounded-full bg-[#EAF5EE] px-2.5 py-1 text-[10px] font-medium uppercase tracking-wide text-[#2E7D32] sm:inline-flex">
