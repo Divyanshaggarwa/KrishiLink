@@ -51,6 +51,7 @@ export default async function FarmerOrdersPage() {
   return (
     <DashboardShell
       profile={profile}
+      showBack={true}
       title="My orders"
       subtitle="Every deal from acceptance to payout."
     >

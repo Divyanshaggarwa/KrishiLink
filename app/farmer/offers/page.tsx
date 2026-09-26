@@ -159,6 +159,7 @@ export default async function OffersReceivedPage() {
   return (
     <DashboardShell
       profile={profile}
+      showBack={true}
       title="Offers received"
       subtitle="Every buyer offer ranked by NET REALIZATION — what actually reaches your hand after logistics and transaction costs."
     >

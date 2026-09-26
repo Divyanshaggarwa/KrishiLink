@@ -38,6 +38,7 @@ export default async function BrowsePage({
   return (
     <DashboardShell
       profile={profile}
+      showBack={true}
       title="Browse produce"
       subtitle="Live listings from verified farmers. Place offers directly."
     >

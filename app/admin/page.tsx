@@ -64,6 +64,24 @@ export default async function AdminDashboard() {
           title="All transactions"
           desc="Every deal across the platform with status and full breakdown."
         />
+        <AdminCard
+          href="/admin/fpo"
+          tag="Review"
+          title="FPO applications"
+          desc="Verify member KrishiLink IDs and approve Farmer Producer Organisations."
+        />
+                <AdminCard
+          href="/admin/users"
+          tag="Manage"
+          title="Users"
+          desc="All registered farmers, buyers, PDS operators, and admins."
+        />
+        <AdminCard
+          href="/admin/disputes"
+          tag="Review"
+          title="Disputes"
+          desc="Transactions flagged for manual review by either party."
+        />
       </div>
 
       {/* System status */}

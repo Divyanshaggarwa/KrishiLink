@@ -74,7 +74,7 @@ export default async function MyBidsPage() {
   return (
     <DashboardShell
       profile={profile}
-      showBack={false}
+      showBack={true}
       title="My bids"
       subtitle="Every offer you've placed — pending, accepted, and rejected."
     >

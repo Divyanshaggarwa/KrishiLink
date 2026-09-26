@@ -8,6 +8,7 @@ export default async function ListProducePage() {
   return (
     <DashboardShell
       profile={profile}
+      showBack={true}
       title="List produce"
       subtitle="Photo, quantity, quality, location — KrishiLink suggests a fair price band and publishes to verified buyers."
     >

@@ -5,6 +5,7 @@ const PUBLIC_PATHS = new Set([
   "/",
   "/login",
   "/signup",
+  "/ivr-sim",
 ]);
 
 const ROLE_HOME: Record<string, string> = {
@@ -25,6 +26,7 @@ function isPublic(path: string) {
   if (PUBLIC_PATHS.has(path)) return true;
   if (path.startsWith("/login")) return true;
   if (path.startsWith("/signup")) return true;
+  if (path.startsWith("/ivr-sim")) return true;      // ← NEW
   if (path.startsWith("/auth/callback")) return true;
   return false;
 }

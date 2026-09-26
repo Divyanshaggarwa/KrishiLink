@@ -21,7 +21,7 @@ export default async function AdminFeesPage() {
   return (
     <DashboardShell
       profile={profile}
-      showBack={false}
+      showBack={true}
       title="Fee configuration"
       subtitle="Single source of truth for all platform charges and transport rates."
     >

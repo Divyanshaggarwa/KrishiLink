@@ -17,6 +17,7 @@ export default async function MyListingsPage() {
   return (
     <DashboardShell
       profile={profile}
+      showBack={true}
       title="My listings"
       subtitle="Every crop you've published, with current status."
     >

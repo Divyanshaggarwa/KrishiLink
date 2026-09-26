@@ -4,6 +4,7 @@ import RealtimeRefresher from "./RealtimeRefresher";
 const ROLE_LABEL: Record<string, string> = {
   farmer: "Farmer",
   buyer: "Buyer",
+  fpo: "FPO Head",
   pds_operator: "PDS Operator",
   admin: "Admin",
 };
@@ -11,6 +12,7 @@ const ROLE_LABEL: Record<string, string> = {
 const ROLE_HOME: Record<string, string> = {
   farmer: "/farmer",
   buyer: "/buyer",
+  fpo: "/farmer",
   pds_operator: "/pds-operator",
   admin: "/admin",
 };
@@ -18,29 +20,36 @@ const ROLE_HOME: Record<string, string> = {
 const NAV: Record<string, { href: string; label: string }[]> = {
   farmer: [
     { href: "/farmer", label: "Overview" },
-    { href: "/farmer/list", label: "List produce" },
-    { href: "/farmer/listings", label: "My listings" },
-    { href: "/farmer/offers", label: "Offers received" },
+    { href: "/farmer/list", label: "List" },
+    { href: "/farmer/listings", label: "Listings" },
+    { href: "/farmer/offers", label: "Offers" },
     { href: "/farmer/orders", label: "Orders" },
+    { href: "/farmer/fpo", label: "FPO" },
+    { href: "/wallet", label: "Wallet" },
   ],
   buyer: [
     { href: "/buyer", label: "Overview" },
-    { href: "/buyer/browse", label: "Browse produce" },
-    { href: "/buyer/bids", label: "My bids" },
+    { href: "/buyer/browse", label: "Browse" },
+    { href: "/buyer/pools", label: "Pools" },
+    { href: "/buyer/bids", label: "Bids" },
     { href: "/buyer/orders", label: "Orders" },
+    { href: "/wallet", label: "Wallet" },
   ],
   pds_operator: [
     { href: "/pds-operator", label: "Overview" },
-    { href: "/pds-operator/assist", label: "Assist a farmer" },
-    { href: "/pds-operator/farmers", label: "Village farmers" },
+    { href: "/pds-operator/assist", label: "Assist" },
+    { href: "/pds-operator/farmers", label: "Farmers" },
+    { href: "/wallet", label: "Wallet" },
   ],
   admin: [
     { href: "/admin", label: "Overview" },
-    { href: "/admin/orders", label: "Orders" },
-    { href: "/admin/fees", label: "Fees" },
     { href: "/admin/users", label: "Users" },
-    { href: "/admin/listings", label: "Listings" },
-    { href: "/admin/transactions", label: "Transactions" },
+    { href: "/admin/orders", label: "Orders" },
+    { href: "/admin/fpo", label: "FPO" },
+    { href: "/admin/fees", label: "Fees" },
+    { href: "/admin/transactions", label: "Txns" },
+    { href: "/admin/disputes", label: "Disputes" },
+    { href: "/wallet", label: "Wallet" },
   ],
 };
 
@@ -48,7 +57,7 @@ export default function DashboardShell({
   profile,
   title,
   subtitle,
-  showBack = true,
+  showBack = false,
   children,
 }: {
   profile: {
@@ -69,7 +78,6 @@ export default function DashboardShell({
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-[#0F1F1A]">
-      {/* Invisible auto-refresh listener */}
       <RealtimeRefresher userId={profile.id} />
 
       <SiteHeader
@@ -77,20 +85,18 @@ export default function DashboardShell({
         logoHref={homeHref}
         nav={nav}
         userId={profile.id}
-                right={
+        right={
           <>
-            <span className="hidden items-center gap-1.5 rounded-full bg-[#EAF5EE] px-2.5 py-1 text-[10px] font-medium uppercase tracking-wide text-[#2E7D32] sm:inline-flex">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#2E7D32]" />
-              Live
-            </span>
-            <div className="hidden text-right md:block">
-              <p className="text-sm font-medium">{profile.full_name}</p>
-              <p className="text-xs text-[#6B7A74]">
+            <div className="hidden text-right lg:block">
+              <p className="text-sm font-medium leading-tight">
+                {profile.full_name}
+              </p>
+              <p className="text-[11px] text-[#6B7A74]">
                 {ROLE_LABEL[profile.role] || profile.role}
                 {profile.district ? ` · ${profile.district}` : ""}
               </p>
             </div>
-            <span className="rounded-full bg-[#EAF5EE] px-3 py-1 text-xs font-medium text-[#1B4D3E]">
+            <span className="hidden rounded-full bg-[#EAF5EE] px-3 py-1 text-xs font-medium text-[#1B4D3E] sm:inline">
               {profile.trust_score ?? 50}
             </span>
             <form action="/auth/signout" method="post">
@@ -102,12 +108,16 @@ export default function DashboardShell({
         }
       />
 
-      <main className="mx-auto max-w-6xl px-6 py-10">
-        <h1 className="font-display text-3xl font-extrabold tracking-tight">
+      <main className="mx-auto max-w-6xl px-4 py-6 md:px-6 md:py-10">
+        <h1 className="font-display text-2xl font-extrabold tracking-tight md:text-3xl">
           {title}
         </h1>
-        {subtitle && <p className="mt-2 text-[#6B7A74]">{subtitle}</p>}
-        <div className="mt-8">{children}</div>
+        {subtitle && (
+          <p className="mt-2 text-sm text-[#6B7A74] md:text-base">
+            {subtitle}
+          </p>
+        )}
+        <div className="mt-6 md:mt-8">{children}</div>
       </main>
     </div>
   );

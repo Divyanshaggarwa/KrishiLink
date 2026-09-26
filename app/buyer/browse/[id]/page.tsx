@@ -30,6 +30,7 @@ export default async function ListingDetail({
   return (
     <DashboardShell
       profile={profile}
+      showBack={true}
       title={listing.crop}
       subtitle={`${listing.district}, ${listing.state}`}
     >

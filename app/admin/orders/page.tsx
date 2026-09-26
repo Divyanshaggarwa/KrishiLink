@@ -43,6 +43,7 @@ export default async function AdminOrdersPage() {
   return (
     <DashboardShell
       profile={profile}
+      showBack={true}
       title="All orders"
       subtitle="Admin control centre — mark shipments and deliveries for the demo."
     >

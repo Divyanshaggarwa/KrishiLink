@@ -11,39 +11,75 @@ export default async function BuyerOrdersPage() {
   const profile = await requireRole(["buyer"]);
   const supabase = await createClient();
 
-  // 1. Transactions
+  // 1. Buyer wallet balance (for button gating)
+  const { data: walletData } = await supabase
+    .from("wallets")
+    .select("balance")
+    .eq("user_id", profile.id)
+    .maybeSingle();
+
+  const buyerBalance = Number(walletData?.balance ?? 0);
+
+  // 2. All buyer transactions (listing-based OR pool-based)
   const { data: orders } = await supabase
     .from("transactions")
     .select(
-      "id, listing_id, offer_id, farmer_id, final_price_per_kg, quantity_kg, gross_amount, escrow_amount_paid, logistics_cost_per_kg, distance_km, vehicle_type, status, created_at"
+      "id, listing_id, pool_id, offer_id, farmer_id, final_price_per_kg, quantity_kg, gross_amount, escrow_amount_paid, logistics_cost_per_kg, distance_km, vehicle_type, status, created_at"
     )
     .eq("buyer_id", profile.id)
     .order("created_at", { ascending: false });
 
   const safeOrders = orders || [];
 
-  // 2. Listings
-  const listingIds = Array.from(new Set(safeOrders.map((o) => o.listing_id)));
+  // 3. Listings lookup
+  const listingIds = Array.from(
+    new Set(safeOrders.map((o) => o.listing_id).filter(Boolean))
+  ) as string[];
+
   const { data: listings } =
     listingIds.length > 0
       ? await supabase
           .from("listings")
           .select("id, crop, quality_grade")
           .in("id", listingIds)
-      : { data: [] };
+      : { data: [] as never[] };
+
   const listingMap = new Map((listings || []).map((l) => [l.id, l]));
 
-  // 3. Farmers via public_profiles
-  const farmerIds = Array.from(new Set(safeOrders.map((o) => o.farmer_id)));
-  const { data: farmers } =
-    farmerIds.length > 0
+  // 4. Pools lookup
+  const poolIds = Array.from(
+    new Set(safeOrders.map((o) => o.pool_id).filter(Boolean))
+  ) as string[];
+
+  const { data: pools } =
+    poolIds.length > 0
+      ? await supabase
+          .from("fpo_pools")
+          .select("id, crop, quality_grade, fpo_id")
+          .in("id", poolIds)
+      : { data: [] as never[] };
+
+  const poolMap = new Map((pools || []).map((p) => [p.id, p]));
+
+  // 5. Sellers (farmers + FPO heads)
+  const sellerIds = Array.from(
+    new Set([
+      ...safeOrders.map((o) => o.farmer_id),
+      ...((pools || []).map((p) => p.fpo_id).filter(Boolean) as string[]),
+    ])
+  );
+
+  const { data: sellers } =
+    sellerIds.length > 0
       ? await supabase
           .from("public_profiles")
           .select("id, full_name, district, state, trust_score, business_name")
-          .in("id", farmerIds)
-      : { data: [] };
-  const farmerMap = new Map((farmers || []).map((f) => [f.id, f]));
+          .in("id", sellerIds)
+      : { data: [] as never[] };
 
+  const sellerMap = new Map((sellers || []).map((s) => [s.id, s]));
+
+  // 6. Summary stats
   const totalSpend = safeOrders
     .filter((o) => o.status === "completed")
     .reduce((sum, o) => sum + Number(o.gross_amount || 0), 0);
@@ -57,8 +93,27 @@ export default async function BuyerOrdersPage() {
       profile={profile}
       showBack={false}
       title="My orders"
-      subtitle="Track every purchase from placement to delivery."
+      subtitle="Track every purchase — individual listings and FPO pools."
     >
+      {/* Wallet strip */}
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-[20px] border border-[#C8E6C9] bg-[#EAF5EE] px-5 py-4">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-[#2E7D32]">
+            Wallet balance
+          </p>
+          <p className="font-display mt-1 text-2xl font-extrabold text-[#1B4D3E]">
+            ₹{buyerBalance.toLocaleString("en-IN")}
+          </p>
+        </div>
+        <Link
+          href="/wallet"
+          className="rounded-full bg-[#1B4D3E] px-5 py-2.5 text-xs font-semibold text-white transition-transform hover:scale-[1.03]"
+        >
+          Top up wallet →
+        </Link>
+      </div>
+
+      {/* Stats */}
       <div className="grid gap-5 md:grid-cols-3">
         <Stat label="Total orders" value={safeOrders.length} />
         <Stat label="In progress" value={inProgress} accent="amber" />
@@ -68,6 +123,7 @@ export default async function BuyerOrdersPage() {
         />
       </div>
 
+      {/* Orders list */}
       <div className="mt-10 space-y-6">
         {safeOrders.length === 0 ? (
           <div className="rounded-[24px] border border-[#E4EBE6] bg-white p-12 text-center">
@@ -75,42 +131,70 @@ export default async function BuyerOrdersPage() {
               No orders yet
             </h3>
             <p className="mx-auto mt-2 max-w-md text-sm text-[#6B7A74]">
-              Once a farmer accepts your offer, the order appears here with
+              Once a seller accepts your offer, the order appears here with
               real-time status.
             </p>
-            <Link
-              href="/buyer/browse"
-              className="mt-6 inline-block rounded-full bg-[#1B4D3E] px-6 py-3 text-sm font-medium text-white"
-            >
-              Browse produce
-            </Link>
+            <div className="mt-6 flex flex-wrap justify-center gap-2">
+              <Link
+                href="/buyer/browse"
+                className="rounded-full bg-[#1B4D3E] px-6 py-3 text-sm font-medium text-white"
+              >
+                Browse produce
+              </Link>
+              <Link
+                href="/buyer/pools"
+                className="rounded-full border border-[#1B4D3E] px-6 py-3 text-sm font-medium text-[#1B4D3E]"
+              >
+                Browse FPO pools
+              </Link>
+            </div>
           </div>
         ) : (
           safeOrders.map((o) => {
-            const l = listingMap.get(o.listing_id);
-            const f = farmerMap.get(o.farmer_id);
+            const isPool = !!o.pool_id;
+            const listing = o.listing_id
+              ? listingMap.get(o.listing_id)
+              : undefined;
+            const pool = o.pool_id ? poolMap.get(o.pool_id) : undefined;
+            const seller = isPool
+              ? pool?.fpo_id
+                ? sellerMap.get(pool.fpo_id)
+                : undefined
+              : sellerMap.get(o.farmer_id);
+
+            const crop = isPool ? pool?.crop : listing?.crop;
+            const grade = isPool ? pool?.quality_grade : listing?.quality_grade;
 
             return (
               <div
                 key={o.id}
                 className="rounded-[24px] border border-[#E4EBE6] bg-white p-6"
               >
+                {/* Header */}
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <h3 className="font-display text-lg font-bold">
-                      {l?.crop ?? "Order"}{" "}
-                      {l?.quality_grade && (
-                        <span className="ml-1 rounded-full bg-[#EAF5EE] px-2 py-0.5 text-[10px] font-medium text-[#2E7D32]">
-                          Grade {l.quality_grade}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-display text-lg font-bold">
+                        {crop ?? "Order"}
+                      </h3>
+                      {grade && (
+                        <span className="rounded-full bg-[#EAF5EE] px-2 py-0.5 text-[10px] font-medium text-[#2E7D32]">
+                          Grade {grade}
                         </span>
                       )}
-                    </h3>
+                      {isPool && (
+                        <span className="rounded-full bg-[#1B4D3E] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-white">
+                          FPO pool
+                        </span>
+                      )}
+                    </div>
                     <p className="mt-1 text-xs text-[#6B7A74]">
-                      Farmer:{" "}
-                      <strong>{f?.business_name || f?.full_name || "—"}</strong>
-                      {f?.district && ` · ${f.district}, ${f.state}`}
+                      {isPool ? "FPO head" : "Farmer"}:{" "}
+                      <strong>
+                        {seller?.business_name || seller?.full_name || "—"}
+                      </strong>
+                      {seller?.district && ` · ${seller.district}`}
                       {o.distance_km ? ` · ${o.distance_km} km` : ""}
-                      {o.vehicle_type ? ` · ${o.vehicle_type}` : ""}
                     </p>
                   </div>
                   <span className="text-xs text-[#6B7A74]">
@@ -122,6 +206,7 @@ export default async function BuyerOrdersPage() {
                   </span>
                 </div>
 
+                {/* Details */}
                 <div className="mt-5 grid gap-4 md:grid-cols-3">
                   <Field
                     label="Deal price"
@@ -135,19 +220,34 @@ export default async function BuyerOrdersPage() {
                   />
                 </div>
 
-                                <div className="mt-5">
+                {/* Timeline */}
+                <div className="mt-5">
                   <Timeline status={o.status} createdAt={o.created_at} />
                 </div>
 
+                {/* Pool note */}
+                {isPool && (
+                  <p className="mt-4 rounded-xl bg-[#EAF5EE] p-3 text-[11px] text-[#1B4D3E]/85">
+                    💡 Payment from this order is split among{" "}
+                    <strong>all contributing FPO members</strong> by their
+                    share.
+                  </p>
+                )}
+
+                {/* Escrow payment button */}
                 {o.status === "escrow_pending" && (
                   <div className="mt-5 flex justify-end border-t border-[#E4EBE6] pt-5">
                     <PayEscrowButton
                       orderId={o.id}
-                      amount={Number((Number(o.gross_amount) * 0.3).toFixed(2))}
+                      amount={Number(
+                        (Number(o.gross_amount) * 0.3).toFixed(2)
+                      )}
+                      buyerBalance={buyerBalance}
                     />
                   </div>
                 )}
 
+                {/* Confirm delivery button */}
                 {o.status === "delivered" && (
                   <div className="mt-5 flex justify-end border-t border-[#E4EBE6] pt-5">
                     <ConfirmDeliveryButton
@@ -158,7 +258,15 @@ export default async function BuyerOrdersPage() {
                           Number(o.gross_amount) * 0.3
                         ).toFixed(2)
                       )}
+                      buyerBalance={buyerBalance}
                     />
+                  </div>
+                )}
+
+                {/* Completed state */}
+                {o.status === "completed" && (
+                  <div className="mt-5 rounded-xl bg-[#EAF5EE] p-3 text-xs font-medium text-[#2E7D32]">
+                    ✓ Order completed — payment released to seller
                   </div>
                 )}
               </div>
@@ -169,6 +277,8 @@ export default async function BuyerOrdersPage() {
     </DashboardShell>
   );
 }
+
+/* ------------------------------------------------------------------ */
 
 function Stat({
   label,
