@@ -4,6 +4,20 @@ import { useActionState } from "react";
 import { acceptPoolOfferAction, type PoolActionResult } from "./actions";
 import ButtonSpinner from "@/components/ButtonSpinner";
 
+const INITIAL: PoolActionResult = { ok: false };
+
+type Props = {
+  offerId: string;
+  poolCrop: string;
+  buyerName: string;
+  buyerRegion: string;
+  pricePerKg: number;
+  quantityKg: number;
+  total: number;
+  message: string | null;
+  pickupMode: string;
+};
+
 export default function PoolOfferCard({
   offerId,
   poolCrop,
@@ -14,21 +28,11 @@ export default function PoolOfferCard({
   total,
   message,
   pickupMode,
-}: {
-  offerId: string;
-  poolCrop: string;
-  buyerName: string;
-  buyerRegion: string;
-  pricePerKg: number;
-  quantityKg: number;
-  total: number;
-  message: string | null;
-  pickupMode: string;
-}) {
+}: Props) {
   const [state, formAction, pending] = useActionState<
     PoolActionResult,
     FormData
-  >(acceptPoolOfferAction, null);
+  >(acceptPoolOfferAction, INITIAL);
 
   return (
     <div className="rounded-[24px] border border-[#E4EBE6] bg-white p-5">
@@ -89,7 +93,7 @@ export default function PoolOfferCard({
         </form>
       </div>
 
-      {state?.ok === false && (
+      {state.error && (
         <p className="mt-2 text-[11px] text-[#C62828]">{state.error}</p>
       )}
     </div>
