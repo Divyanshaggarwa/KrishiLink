@@ -13,7 +13,8 @@ export type IvrActionResult =
   | { ok: false; error: string };
 
 /* ------------------------------------------------------------------ */
-/*  Look up farmer by KrishiLink ID + send OTP                        */
+/*  Look up user by KrishiLink ID + send OTP                          */
+/*  Accepts ANY role — role-specific gating happens after OTP.        */
 /* ------------------------------------------------------------------ */
 export async function sendIvrOtp(
   rawId: string
@@ -25,8 +26,6 @@ export async function sendIvrOtp(
   }
 
   const admin = createAdminClient();
-
-  // Try every common format
   const candidates = [
     `KL-${digits}`,
     digits,
@@ -34,44 +33,39 @@ export async function sendIvrOtp(
     `kl-${digits}`,
   ];
 
-  let farmer: {
+  let profile: {
     id: string;
     phone: string | null;
     role: string;
     full_name: string;
+    fpo_status: string | null;
+    fpo_id: string | null;
   } | null = null;
 
   for (const candidate of candidates) {
     const { data } = await admin
       .from("profiles")
-      .select("id, phone, role, full_name")
+      .select("id, phone, role, full_name, fpo_status, fpo_id")
       .ilike("krishilink_id", candidate)
       .maybeSingle();
 
     if (data) {
-      farmer = data;
+      profile = data;
       break;
     }
   }
 
-  if (!farmer) {
+  if (!profile) {
     return {
       ok: false,
-      error: `No account found for KL-${digits}. Please check your ID on the farmer dashboard.`,
+      error: `No account found for KL-${digits}. Please check your KrishiLink ID.`,
     };
   }
 
-  if (farmer.role !== "farmer" && farmer.role !== "fpo") {
+  if (!profile.phone) {
     return {
       ok: false,
-      error: "This ID is not registered as a Farmer or FPO account.",
-    };
-  }
-
-  if (!farmer.phone) {
-    return {
-      ok: false,
-      error: "No phone registered on this account. Contact support.",
+      error: "No phone number on this account. Contact support.",
     };
   }
 
@@ -88,7 +82,7 @@ export async function sendIvrOtp(
 
   const { error: insertErr } = await admin.from("ivr_otps").insert({
     krishilink_id: `KL-${digits}`,
-    phone: farmer.phone,
+    phone: profile.phone,
     otp,
     expires_at: expiresAt,
   });
@@ -100,15 +94,18 @@ export async function sendIvrOtp(
   return {
     ok: true,
     data: {
-      phone: maskPhone(farmer.phone),
-      farmerName: farmer.full_name,
+      phone: maskPhone(profile.phone),
+      farmerName: profile.full_name,
+      role: profile.role,
+      fpoStatus: profile.fpo_status,
+      fpoId: profile.fpo_id,
     },
     demoOtp: otp,
   };
 }
 
 /* ------------------------------------------------------------------ */
-/*  Verify OTP → return farmerId                                     */
+/*  Verify OTP → return farmerId + role info                          */
 /* ------------------------------------------------------------------ */
 export async function verifyIvrOtp(
   rawId: string,
@@ -143,30 +140,39 @@ export async function verifyIvrOtp(
     return { ok: false, error: "OTP expired. Please request a new one." };
   }
   if (record.otp !== otp) {
-    return { ok: false, error: "Incorrect OTP. Please try again." };
+    return { ok: false, error: "Incorrect OTP." };
   }
 
   await admin.from("ivr_otps").update({ verified: true }).eq("id", record.id);
 
-  const { data: farmer } = await admin
+  const { data: profile } = await admin
     .from("profiles")
-    .select("id")
+    .select("id, role, fpo_status, fpo_id, full_name")
     .eq("krishilink_id", krishilinkId)
     .maybeSingle();
 
-  if (!farmer) {
+  if (!profile) {
     return { ok: false, error: "Account not found." };
   }
 
   await admin.from("ivr_sessions").insert({
     farmer_phone: "verified",
-    farmer_id: farmer.id,
+    farmer_id: profile.id,
     flow_step: "OTP_VERIFY",
     input: krishilinkId,
     result: "otp_verified",
   });
 
-  return { ok: true, data: { farmerId: farmer.id } };
+  return {
+    ok: true,
+    data: {
+      farmerId: profile.id,
+      role: profile.role,
+      fpoStatus: profile.fpo_status,
+      fpoId: profile.fpo_id,
+      fullName: profile.full_name,
+    },
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -188,7 +194,6 @@ export async function finalizeIvrListing(
 
   const admin = createAdminClient();
 
-  // Verify the farmer exists
   const { data: farmer } = await admin
     .from("profiles")
     .select("role, district, state, pincode")
@@ -196,9 +201,6 @@ export async function finalizeIvrListing(
     .maybeSingle();
 
   if (!farmer) return { ok: false, error: "Farmer not found." };
-  if (farmer.role !== "farmer" && farmer.role !== "fpo") {
-    return { ok: false, error: "This account cannot create listings." };
-  }
 
   const { data, error } = await admin
     .from("listings")
@@ -237,7 +239,6 @@ export async function loadIvrOffers(farmerId: string): Promise<IvrActionResult> 
 
   const admin = createAdminClient();
 
-  // Farmer's listings
   const { data: listings } = await admin
     .from("listings")
     .select("id, crop, quantity_kg, quality_grade, district, state")
@@ -250,7 +251,6 @@ export async function loadIvrOffers(farmerId: string): Promise<IvrActionResult> 
   const listingIds = listings.map((l) => l.id);
   const listingMap = new Map(listings.map((l) => [l.id, l]));
 
-  // Pending offers
   const { data: offers } = await admin
     .from("offers")
     .select("id, listing_id, buyer_id, price_per_kg, quantity_kg, status")
@@ -261,7 +261,6 @@ export async function loadIvrOffers(farmerId: string): Promise<IvrActionResult> 
     return { ok: true, data: { offers: [], count: 0 } };
   }
 
-  // Buyer profiles
   const buyerIds = Array.from(new Set(offers.map((o) => o.buyer_id)));
   const { data: buyers } = await admin
     .from("profiles")
@@ -330,7 +329,6 @@ export async function acceptIvrOffer(
     return { ok: false, error: "You don't own this listing." };
   }
 
-  // Accept
   await admin.from("offers").update({ status: "accepted" }).eq("id", offerId);
   await admin
     .from("offers")
@@ -343,7 +341,6 @@ export async function acceptIvrOffer(
     .update({ status: "sold" })
     .eq("id", listing.id);
 
-  // Fetch profiles for distance
   const [{ data: farmerProfile }, { data: buyerProfile }] = await Promise.all([
     admin
       .from("profiles")
@@ -364,7 +361,7 @@ export async function acceptIvrOffer(
     buyerProfile?.state ?? null
   );
 
-  const transport = 0; // IVR defaults to self / pickup
+  const transport = 0;
   const txn = TRANSACTION_COST_PER_KG;
   const netPerKg = Number(
     (Number(offer.price_per_kg) - transport - txn).toFixed(2)
