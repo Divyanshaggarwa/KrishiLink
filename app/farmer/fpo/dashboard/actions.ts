@@ -4,10 +4,6 @@ import { createClient } from "@/lib/supabase/server";
 import { getCurrentProfile } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 
-/* ------------------------------------------------------------------ */
-/*  Types                                                             */
-/* ------------------------------------------------------------------ */
-
 export type PoolActionResult = {
   ok: boolean;
   error?: string;
@@ -17,7 +13,6 @@ export type PoolActionResult = {
 /* ------------------------------------------------------------------ */
 /*  Create pool                                                       */
 /* ------------------------------------------------------------------ */
-
 export async function createPoolAction(input: {
   crop: string;
   totalQuantityKg: number;
@@ -112,9 +107,8 @@ export async function createPoolAction(input: {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Accept a buyer's offer on a pool + split revenue                  */
+/*  Accept a buyer offer on a pool + split revenue                    */
 /* ------------------------------------------------------------------ */
-
 export async function acceptPoolOfferAction(
   _prev: PoolActionResult,
   formData: FormData

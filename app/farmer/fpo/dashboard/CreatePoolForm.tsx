@@ -44,7 +44,6 @@ export default function CreatePoolForm({
     setError(null);
     setBusy(true);
 
-    // Build contributions array — head first if they contributed
     const allContribs: { memberId: string; quantityKg: number }[] = [];
     if (headQty > 0) {
       allContribs.push({ memberId: headId, quantityKg: headQty });
@@ -65,7 +64,7 @@ export default function CreatePoolForm({
       contributions: allContribs,
     });
     setBusy(false);
-      if (!res.ok) {
+    if (!res.ok) {
       setError(res.error ?? "Could not create pool");
       return;
     }
@@ -102,7 +101,6 @@ export default function CreatePoolForm({
 
   return (
     <div className="space-y-6">
-      {/* Pool info */}
       <div className="rounded-[24px] border border-[#E4EBE6] bg-white p-6">
         <h3 className="font-display text-lg font-bold text-[#1B4D3E]">
           Pool details
@@ -184,7 +182,6 @@ export default function CreatePoolForm({
         </div>
       </div>
 
-      {/* Contributions */}
       <div className="rounded-[24px] border border-[#E4EBE6] bg-white p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -213,7 +210,6 @@ export default function CreatePoolForm({
         </div>
 
         <div className="mt-5 space-y-2">
-          {/* FPO HEAD ROW — highlighted */}
           <div className="flex flex-wrap items-center gap-3 rounded-xl border-2 border-[#2E7D32] bg-[#EAF5EE] p-3">
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-[#1B4D3E]">
@@ -234,17 +230,14 @@ export default function CreatePoolForm({
               className="w-24 rounded-lg border border-[#A5D6A7] bg-white px-3 py-2 text-sm outline-none focus:border-[#2E7D32]"
             />
             <span className="w-16 text-right text-xs text-[#6B7A74]">
-              {totalNum > 0
-                ? ((headQty / totalNum) * 100).toFixed(1)
-                : "0"}
-              %
+              {totalNum > 0 ? ((headQty / totalNum) * 100).toFixed(1) : "0"}%
             </span>
           </div>
 
           {members.length === 0 ? (
             <p className="rounded-xl bg-[#F8F9FA] p-4 text-sm text-[#6B7A74]">
               No other members yet. You can still create a pool by contributing
-              yourself, or wait for members to join.
+              yourself.
             </p>
           ) : (
             members.map((m) => {

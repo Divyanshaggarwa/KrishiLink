@@ -4,18 +4,12 @@ import { createClient } from "@/lib/supabase/server";
 import { getCurrentProfile } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 
-/* ------------------------------------------------------------------ */
-/*  Single result type — NO `| null` (actions never return null)     */
-/* ------------------------------------------------------------------ */
 export type WalletActionResult = {
   ok: boolean;
   error?: string;
   data?: unknown;
 };
 
-/* ------------------------------------------------------------------ */
-/*  Top up wallet (simulated payment gateway)                        */
-/* ------------------------------------------------------------------ */
 export async function topUpWallet(
   _prev: WalletActionResult,
   formData: FormData
@@ -48,9 +42,6 @@ export async function topUpWallet(
   return { ok: true };
 }
 
-/* ------------------------------------------------------------------ */
-/*  Withdraw to bank (simulated)                                     */
-/* ------------------------------------------------------------------ */
 export async function withdrawFromWallet(
   _prev: WalletActionResult,
   formData: FormData
@@ -82,9 +73,6 @@ export async function withdrawFromWallet(
   return { ok: true };
 }
 
-/* ------------------------------------------------------------------ */
-/*  Pay escrow from wallet                                            */
-/* ------------------------------------------------------------------ */
 export async function payEscrowFromWallet(
   _prev: WalletActionResult,
   formData: FormData
@@ -151,9 +139,6 @@ export async function payEscrowFromWallet(
   return { ok: true };
 }
 
-/* ------------------------------------------------------------------ */
-/*  Confirm delivery → release final 70% → credit seller(s)          */
-/* ------------------------------------------------------------------ */
 export async function confirmDeliveryFromWallet(
   _prev: WalletActionResult,
   formData: FormData
