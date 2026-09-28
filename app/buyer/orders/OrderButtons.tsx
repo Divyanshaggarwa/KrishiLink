@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   payEscrowFromWallet,
@@ -25,7 +25,21 @@ export function PayEscrowButton({
     FormData
   >(payEscrowFromWallet, INITIAL);
 
+  const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    if (state.ok) setDone(true);
+  }, [state.ok]);
+
   const insufficient = buyerBalance < amount;
+
+  if (done) {
+    return (
+      <div className="rounded-xl bg-[#EAF5EE] px-4 py-3 text-sm font-medium text-[#2E7D32]">
+        ✓ Escrow paid — awaiting shipment
+      </div>
+    );
+  }
 
   if (insufficient) {
     return (
@@ -54,7 +68,7 @@ export function PayEscrowButton({
       <input type="hidden" name="orderId" value={orderId} />
       <button
         type="submit"
-        disabled={pending}
+        disabled={pending || done}
         className="flex items-center gap-2 rounded-full bg-[#1B4D3E] px-5 py-2.5 text-sm font-semibold text-white transition-transform hover:scale-[1.03] disabled:opacity-60"
       >
         {pending ? (
@@ -89,7 +103,21 @@ export function ConfirmDeliveryButton({
     FormData
   >(confirmDeliveryFromWallet, INITIAL);
 
+  const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    if (state.ok) setDone(true);
+  }, [state.ok]);
+
   const insufficient = buyerBalance < finalAmount;
+
+  if (done) {
+    return (
+      <div className="rounded-xl bg-[#EAF5EE] px-4 py-3 text-sm font-medium text-[#2E7D32]">
+        ✓ Order completed — payment released to seller
+      </div>
+    );
+  }
 
   if (insufficient) {
     return (
@@ -118,7 +146,7 @@ export function ConfirmDeliveryButton({
       <input type="hidden" name="orderId" value={orderId} />
       <button
         type="submit"
-        disabled={pending}
+        disabled={pending || done}
         className="flex items-center gap-2 rounded-full bg-[#2E7D32] px-5 py-2.5 text-sm font-semibold text-white transition-transform hover:scale-[1.03] disabled:opacity-60"
       >
         {pending ? (

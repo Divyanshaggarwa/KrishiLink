@@ -1,22 +1,21 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 
-export type UserRole = "farmer" | "buyer" | "pds_operator" | "admin";
+export type UserRole = "farmer" | "buyer" | "pds_operator" | "admin" | "fpo";
 
 export const ROLE_HOME: Record<UserRole, string> = {
   farmer: "/farmer",
   buyer: "/buyer",
+  fpo: "/farmer",
   pds_operator: "/pds-operator",
   admin: "/admin",
 };
 
-/**
- * Shape of a row from the `profiles` table.
- * Keep this in sync with the SQL schema.
- */
+export type VerificationStatus = "pending" | "verified" | "rejected";
+
 export type Profile = {
   id: string;
-  role: UserRole;
+  role: string;
   full_name: string;
   phone: string | null;
   krishilink_id: string | null;
@@ -33,18 +32,26 @@ export type Profile = {
   pds_center_id: string | null;
   business_name: string | null;
   gst_number: string | null;
-  // FPO fields
+
+  // Verification
+  verification_status: VerificationStatus;
+  verification_submitted_at: string | null;
+  verification_reviewed_at: string | null;
+  verification_reviewed_by: string | null;
+  verification_notes: string | null;
+
+  // FPO
   fpo_name: string | null;
   fpo_region: string | null;
   fpo_status: "pending" | "approved" | "rejected" | null;
   fpo_member_count: number | null;
   fpo_head_id: string | null;
-  fpo_id: string | null;              // NEW: KF-XXXXXX
+  fpo_id: string | null;
   fpo_applied_at: string | null;
   fpo_approved_at: string | null;
   fpo_approved_by: string | null;
   fpo_rejection_reason: string | null;
-  // End FPO
+
   created_at: string;
   updated_at: string;
 };

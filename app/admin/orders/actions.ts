@@ -1,10 +1,13 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getCurrentProfile } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 
-export type AdminOrderState = { error?: string; ok?: boolean } | null;
+export type AdminOrderState = {
+  ok: boolean;
+  error?: string;
+};
 
 export async function adminMarkShippedAction(
   _prev: AdminOrderState,
@@ -12,50 +15,58 @@ export async function adminMarkShippedAction(
 ): Promise<AdminOrderState> {
   const profile = await getCurrentProfile();
   if (!profile || profile.role !== "admin") {
-    return { error: "Admin only." };
+    return { ok: false, error: "Admin only." };
   }
 
   const orderId = String(formData.get("orderId") || "");
-  if (!orderId) return { error: "Missing order ID." };
+  if (!orderId) return { ok: false, error: "Missing order ID." };
 
-  const supabase = await createClient();
+  const supabase = createAdminClient();
+
   const { data: order } = await supabase
     .from("transactions")
-    .select("id, buyer_id, farmer_id, status")
+    .select("id, buyer_id, farmer_id, status, pool_id")
     .eq("id", orderId)
     .single();
 
-  if (!order) return { error: "Order not found." };
+  if (!order) return { ok: false, error: "Order not found." };
   if (order.status !== "escrow_paid") {
-    return { error: "Buyer must pay the 30% advance first." };
+    return { ok: false, error: "Buyer must pay the 30% advance first." };
   }
 
-  const { error } = await supabase
+  const { data: updated, error } = await supabase
     .from("transactions")
     .update({ status: "in_transit", updated_at: new Date().toISOString() })
-    .eq("id", orderId);
-  if (error) return { error: error.message };
+    .eq("id", orderId)
+    .select("id, status")
+    .single();
 
-  await Promise.all([
-    supabase.from("notifications").insert({
+  if (error || !updated) {
+    return { ok: false, error: error?.message ?? "Update failed." };
+  }
+
+  await supabase.from("notifications").insert([
+    {
       user_id: order.buyer_id,
       kind: "in_transit",
       title: "Order shipped",
       body: "KrishiLink logistics has picked up the shipment.",
       link: "/buyer/orders",
-    }),
-    supabase.from("notifications").insert({
+    },
+    {
       user_id: order.farmer_id,
       kind: "in_transit",
       title: "Your shipment is on the way",
       body: "Logistics has picked up your produce.",
-      link: "/farmer/orders",
-    }),
+      link: order.pool_id ? "/farmer/fpo/dashboard/offers" : "/farmer/orders",
+    },
   ]);
 
   revalidatePath("/admin/orders");
   revalidatePath("/farmer/orders");
+  revalidatePath("/farmer/fpo/dashboard");
   revalidatePath("/buyer/orders");
+
   return { ok: true };
 }
 
@@ -65,29 +76,35 @@ export async function adminMarkDeliveredAction(
 ): Promise<AdminOrderState> {
   const profile = await getCurrentProfile();
   if (!profile || profile.role !== "admin") {
-    return { error: "Admin only." };
+    return { ok: false, error: "Admin only." };
   }
 
   const orderId = String(formData.get("orderId") || "");
-  if (!orderId) return { error: "Missing order ID." };
+  if (!orderId) return { ok: false, error: "Missing order ID." };
 
-  const supabase = await createClient();
+  const supabase = createAdminClient();
+
   const { data: order } = await supabase
     .from("transactions")
     .select("id, buyer_id, farmer_id, status")
     .eq("id", orderId)
     .single();
 
-  if (!order) return { error: "Order not found." };
+  if (!order) return { ok: false, error: "Order not found." };
   if (order.status !== "in_transit") {
-    return { error: "Order isn't in transit yet." };
+    return { ok: false, error: "Order isn't in transit yet." };
   }
 
-  const { error } = await supabase
+  const { data: updated, error } = await supabase
     .from("transactions")
     .update({ status: "delivered", updated_at: new Date().toISOString() })
-    .eq("id", orderId);
-  if (error) return { error: error.message };
+    .eq("id", orderId)
+    .select("id, status")
+    .single();
+
+  if (error || !updated) {
+    return { ok: false, error: error?.message ?? "Update failed." };
+  }
 
   await supabase.from("notifications").insert({
     user_id: order.buyer_id,
@@ -99,6 +116,8 @@ export async function adminMarkDeliveredAction(
 
   revalidatePath("/admin/orders");
   revalidatePath("/farmer/orders");
+  revalidatePath("/farmer/fpo/dashboard");
   revalidatePath("/buyer/orders");
+
   return { ok: true };
 }

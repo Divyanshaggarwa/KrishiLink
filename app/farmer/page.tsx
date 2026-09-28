@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
 import DashboardShell from "@/components/DashboardShell";
+import VerificationStatusCard from "@/components/VerificationStatusCard";
 import { createClient } from "@/lib/supabase/server";
 
 export default async function FarmerDashboard() {
@@ -31,6 +32,12 @@ export default async function FarmerDashboard() {
   ]);
 
   const fpoStatus = profile.fpo_status;
+  const fpoHref =
+    fpoStatus === "approved" ? "/farmer/fpo/dashboard" : "/farmer/fpo";
+
+  const location = [profile.village, profile.district, profile.state]
+    .filter(Boolean)
+    .join(", ");
 
   return (
     <DashboardShell
@@ -38,7 +45,6 @@ export default async function FarmerDashboard() {
       title={`Welcome, ${profile.full_name.split(" ")[0]}`}
       subtitle="Your farm's marketplace dashboard."
     >
-      {/* ============ STATS ROW ============ */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
         <Stat
           label="Total listings"
@@ -66,46 +72,45 @@ export default async function FarmerDashboard() {
         />
       </div>
 
-      {/* ============ ACCOUNT DETAILS CARD ============ */}
-      <div className="mt-6 overflow-hidden rounded-[24px] border border-[#E4EBE6] bg-white">
-        <div className="flex items-center justify-between border-b border-[#E4EBE6] px-5 py-3 md:px-6">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-[#6B7A74]">
-            Account details
-          </p>
-          {profile.is_verified && (
-            <span className="rounded-full bg-[#EAF5EE] px-2.5 py-0.5 text-[10px] font-semibold text-[#2E7D32]">
-              ✓ Verified
+      <VerificationStatusCard profile={profile} role="farmer" />
+
+      <section className="mt-6 overflow-hidden rounded-[24px] border border-[#E4EBE6] bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E4EBE6] px-5 py-3.5 md:px-6">
+          <div className="flex items-center gap-2">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#EAF5EE] text-[#1B4D3E]">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="12" cy="8" r="4" />
+                <path d="M4 21a8 8 0 0 1 16 0" />
+              </svg>
             </span>
-          )}
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-[#6B7A74]">
+              Account details
+            </p>
+          </div>
         </div>
 
-        <div className="grid gap-5 p-5 md:grid-cols-[1fr_auto] md:p-6">
-          {/* Left: info grid */}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-6 p-5 md:grid-cols-[1fr_auto] md:p-6">
+          <div className="grid gap-x-6 gap-y-5 sm:grid-cols-2 lg:grid-cols-4">
             <Detail label="Full name" value={profile.full_name} />
-            <Detail
-              label="KrishiLink ID"
-              value={profile.krishilink_id ?? "Generating…"}
-              mono
-              accent
-            />
             <Detail label="Mobile" value={profile.phone ?? "—"} />
+            <Detail label="Location" value={location || "—"} span={2} />
             <Detail
-              label="Location"
-              value={
-                [profile.village, profile.district, profile.state]
-                  .filter(Boolean)
-                  .join(", ") || "—"
-              }
-            />
-            <Detail
-              label="Preferred language"
+              label="Language"
               value={
                 profile.language === "hi"
                   ? "हिन्दी"
                   : profile.language === "kn"
-                  ? "ಕನ್ನಡ"
-                  : "English"
+                    ? "ಕನ್ನಡ"
+                    : "English"
               }
             />
             <Detail
@@ -114,16 +119,17 @@ export default async function FarmerDashboard() {
               accent
             />
             <Detail
-              label="FPO status"
+              label="FPO"
               value={
                 fpoStatus === "approved"
-                  ? "Active head"
+                  ? `${profile.fpo_name ?? "FPO"} · ${profile.fpo_id ?? ""}`
                   : fpoStatus === "pending"
-                  ? "Under review"
-                  : fpoStatus === "rejected"
-                  ? "Rejected"
-                  : "Not registered"
+                    ? "Under review"
+                    : fpoStatus === "rejected"
+                      ? "Rejected"
+                      : "Not registered"
               }
+              span={2}
             />
             <Detail
               label="Member since"
@@ -139,23 +145,27 @@ export default async function FarmerDashboard() {
             />
           </div>
 
-          {/* Right: KrishiLink ID hero mini-card */}
-          <div className="flex flex-col justify-center rounded-2xl border border-[#C8E6C9] bg-gradient-to-br from-[#EAF5EE] to-white p-5 md:w-64">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-[#2E7D32]">
-              Your KrishiLink ID
-            </p>
-            <p className="font-display mt-2 select-all text-2xl font-extrabold tracking-wide text-[#1B4D3E]">
-              {profile.krishilink_id ?? "—"}
-            </p>
-            <p className="mt-2 text-[11px] leading-relaxed text-[#6B7A74]">
-              Give this ID to anyone who helps you sell — family, PDS operator,
-              or the IVR helpline.
-            </p>
+          <div className="relative flex flex-col justify-center overflow-hidden rounded-2xl border border-[#C8E6C9] bg-gradient-to-br from-[#EAF5EE] to-white p-5 md:w-60">
+            <div
+              className="absolute -right-12 -top-12 h-32 w-32 rounded-full bg-[#A5D6A7] opacity-40 blur-2xl"
+              aria-hidden="true"
+            />
+            <div className="relative">
+              <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-[#2E7D32]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#2E7D32]" />
+                KrishiLink ID
+              </div>
+              <p className="font-display mt-2 select-all text-2xl font-extrabold tracking-wider text-[#1B4D3E] md:text-3xl">
+                {profile.krishilink_id ?? "—"}
+              </p>
+              <p className="mt-2 text-[11px] leading-relaxed text-[#6B7A74]">
+                Share this ID with family, PDS operators, or the IVR helpline.
+              </p>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      {/* ============ QUICK ACTIONS ============ */}
       <div className="mt-10">
         <div className="mb-4 flex items-end justify-between">
           <div>
@@ -169,7 +179,6 @@ export default async function FarmerDashboard() {
         </div>
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          {/* List produce — big dark tile */}
           <Link
             href="/farmer/list"
             className="group relative overflow-hidden rounded-[24px] border border-[#1B4D3E] bg-gradient-to-br from-[#1B4D3E] to-[#0F3428] p-6 text-white transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_25px_50px_-20px_rgba(27,77,62,0.55)] md:col-span-2 lg:row-span-2"
@@ -187,10 +196,18 @@ export default async function FarmerDashboard() {
                   →
                 </span>
               </div>
-
               <div className="mt-auto pt-14">
                 <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-white/10 text-[#A5D6A7]">
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    width="22"
+                    height="22"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <path d="M12 21v-8" />
                     <path d="M12 13c0-4 3-6 8-6 0 4-3 6-8 6z" />
                     <path d="M12 13c0-3-2.5-5-7-5 0 3.5 2.5 5 7 5z" />
@@ -213,7 +230,6 @@ export default async function FarmerDashboard() {
             desc="Track every crop"
             count={listingsRes.count ?? 0}
           />
-
           <ActionTile
             href="/farmer/offers"
             label="Offers received"
@@ -222,7 +238,6 @@ export default async function FarmerDashboard() {
             highlight={(offersRes.count ?? 0) > 0}
             accent="green"
           />
-
           <ActionTile
             href="/farmer/orders"
             label="Orders"
@@ -230,9 +245,8 @@ export default async function FarmerDashboard() {
             count={ordersRes.count ?? 0}
           />
 
-          {/* FPO tile */}
           <Link
-            href="/farmer/fpo"
+            href={fpoHref}
             className="group relative overflow-hidden rounded-[24px] border border-[#C8E6C9] bg-gradient-to-br from-[#EAF5EE] to-white p-6 transition-all duration-300 hover:-translate-y-1 hover:border-[#2E7D32] hover:shadow-[0_25px_50px_-20px_rgba(46,125,50,0.3)] md:col-span-2"
           >
             <div className="flex items-start justify-between">
@@ -241,24 +255,32 @@ export default async function FarmerDashboard() {
                   fpoStatus === "approved"
                     ? "bg-[#2E7D32] text-white"
                     : fpoStatus === "pending"
-                    ? "bg-[#FFF8E1] text-[#B26A00]"
-                    : "bg-white text-[#2E7D32]"
+                      ? "bg-[#FFF8E1] text-[#B26A00]"
+                      : "bg-white text-[#2E7D32]"
                 }`}
               >
                 {fpoStatus === "approved"
-                  ? "Active"
+                  ? `Active · ${profile.fpo_id ?? ""}`
                   : fpoStatus === "pending"
-                  ? "Under review"
-                  : "Register"}
+                    ? "Under review"
+                    : "Register"}
               </span>
               <span className="text-[#2E7D32] transition-transform group-hover:translate-x-1">
                 →
               </span>
             </div>
-
             <div className="mt-5 flex items-start gap-4">
               <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#2E7D32] text-white">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <circle cx="9" cy="8" r="3.5" />
                   <path d="M3 20c0-3.5 2.5-6 6-6s6 2.5 6 6" />
                   <circle cx="17" cy="9" r="2.5" />
@@ -273,10 +295,10 @@ export default async function FarmerDashboard() {
                   {fpoStatus === "approved"
                     ? `${profile.fpo_name ?? "Your FPO"} · ${
                         profile.fpo_member_count ?? 0
-                      } members`
+                      } members · Open dashboard`
                     : fpoStatus === "pending"
-                    ? "Application under review"
-                    : "Pool crops with nearby farmers"}
+                      ? "Application under review"
+                      : "Pool crops with nearby farmers"}
                 </p>
               </div>
             </div>
@@ -286,8 +308,6 @@ export default async function FarmerDashboard() {
     </DashboardShell>
   );
 }
-
-/* ------------------------------------------------------------------ */
 
 function Stat({
   label,
@@ -304,22 +324,26 @@ function Stat({
     accent === "green"
       ? "text-[#2E7D32]"
       : accent === "amber"
-      ? "text-[#B26A00]"
-      : accent === "blue"
-      ? "text-[#1565C0]"
-      : accent === "purple"
-      ? "text-[#6A1B9A]"
-      : "text-[#1B4D3E]";
+        ? "text-[#B26A00]"
+        : accent === "blue"
+          ? "text-[#1565C0]"
+          : accent === "purple"
+            ? "text-[#6A1B9A]"
+            : "text-[#1B4D3E]";
 
   return (
     <div className="rounded-[20px] border border-[#E4EBE6] bg-white p-4 md:p-5">
       <p className="text-[10px] font-medium uppercase tracking-wide text-[#6B7A74] md:text-[11px]">
         {label}
       </p>
-      <p className={`font-display mt-2 text-2xl font-extrabold md:text-3xl ${color}`}>
+      <p
+        className={`font-display mt-2 text-2xl font-extrabold md:text-3xl ${color}`}
+      >
         {value}
       </p>
-      {hint && <p className="mt-1 text-[10px] text-[#6B7A74] md:text-[11px]">{hint}</p>}
+      {hint && (
+        <p className="mt-1 text-[10px] text-[#6B7A74] md:text-[11px]">{hint}</p>
+      )}
     </div>
   );
 }
@@ -327,16 +351,18 @@ function Stat({
 function Detail({
   label,
   value,
-  mono,
   accent,
+  mono,
+  span,
 }: {
   label: string;
   value: string;
-  mono?: boolean;
   accent?: boolean;
+  mono?: boolean;
+  span?: 2;
 }) {
   return (
-    <div className="min-w-0">
+    <div className={span === 2 ? "sm:col-span-2" : "min-w-0"}>
       <p className="text-[10px] font-medium uppercase tracking-wide text-[#6B7A74]">
         {label}
       </p>

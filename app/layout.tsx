@@ -1,47 +1,18 @@
 import type { Metadata, Viewport } from "next";
-import localFont from "next/font/local";
+import { Inter, Manrope } from "next/font/google";
 import "./globals.css";
+import LiveSyncMount from "@/components/LiveSyncMount";
 
-const inter = localFont({
-  src: [
-    {
-      path: "./fonts/inter-v20-latin-regular.woff2",
-      weight: "400",
-      style: "normal",
-    },
-    {
-      path: "./fonts/inter-v20-latin-500.woff2",
-      weight: "500",
-      style: "normal",
-    },
-    {
-      path: "./fonts/inter-v20-latin-600.woff2",
-      weight: "600",
-      style: "normal",
-    },
-  ],
+const inter = Inter({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
   variable: "--font-inter",
   display: "swap",
 });
 
-const manrope = localFont({
-  src: [
-    {
-      path: "./fonts/manrope-v20-latin-600.woff2",
-      weight: "600",
-      style: "normal",
-    },
-    {
-      path: "./fonts/manrope-v20-latin-700.woff2",
-      weight: "700",
-      style: "normal",
-    },
-    {
-      path: "./fonts/manrope-v20-latin-800.woff2",
-      weight: "800",
-      style: "normal",
-    },
-  ],
+const manrope = Manrope({
+  subsets: ["latin"],
+  weight: ["600", "700", "800"],
   variable: "--font-manrope",
   display: "swap",
 });
@@ -63,7 +34,10 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" className={`${inter.variable} ${manrope.variable}`}>
-      <body>{children}</body>
+      <body>
+        <LiveSyncMount />
+        {children}
+      </body>
     </html>
   );
 }

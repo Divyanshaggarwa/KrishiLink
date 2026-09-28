@@ -5,26 +5,32 @@ import {
   startSession,
   advance,
   t,
+  buildContribSummary,
   isNumericStep,
   optionsForStep,
   CROPS,
   type IvrSession,
   type IvrStep,
   type IvrOption,
+  type FpoMember,
 } from "@/lib/ivr/stateMachine";
 import {
   sendIvrOtp,
   verifyIvrOtp,
-  finalizeIvrListing,
-  loadIvrOffers,
-  acceptIvrOffer,
+  farmerCreateListing,
+  farmerLoadOffers,
+  farmerAcceptOffer,
+  fpoLoadMembers,
+  fpoCreatePoolWithContributions,
+  fpoLoadOffers,
+  fpoAcceptPoolOffer,
+  buyerLoadListingsByCrop,
+  buyerPlaceOffer,
+  buyerLoadBids,
+  buyerLoadOrders,
   loadIvrPrices,
 } from "./actions";
 import ButtonSpinner from "@/components/ButtonSpinner";
-
-/* ------------------------------------------------------------------ */
-/*  Types                                                              */
-/* ------------------------------------------------------------------ */
 
 type Line =
   | { kind: "prompt"; text: string; options?: IvrOption[]; time: string }
@@ -39,11 +45,18 @@ type Offer = {
   pricePerKg: number;
   quantityKg: number;
   netPerKg: number;
+  _source: "listing" | "pool";
 };
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
-/* ------------------------------------------------------------------ */
+type BuyerListing = {
+  id: string;
+  crop: string;
+  grade: string;
+  price: number;
+  quantity: number;
+  district: string;
+  farmerName: string;
+};
 
 function now() {
   return new Date().toLocaleTimeString("en-IN", {
@@ -54,27 +67,41 @@ function now() {
 }
 
 function inputTypeForStep(step: IvrStep): "menu" | "numeric" | "otp" {
-  if (step === "ID_INPUT" || step === "LIST_QUANTITY" || step === "LIST_PRICE") {
+  if (
+    step === "ID_INPUT" ||
+    step === "LIST_QUANTITY" ||
+    step === "LIST_PRICE" ||
+    step === "FPO_CONTRIB_MEMBER" ||
+    step === "BUYER_OFFER_QTY" ||
+    step === "BUYER_OFFER_PRICE"
+  ) {
     return "numeric";
   }
   if (step === "OTP_VERIFY") return "otp";
   return "menu";
 }
 
-/** Menu helpers — role-aware. */
 function isMenuStep(step: IvrStep): boolean {
-  return step === "MAIN_MENU" || step === "MAIN_MENU_FPO";
-}
-function menuStepFor(s: IvrSession): IvrStep {
-  return s.role === "fpo" ? "MAIN_MENU_FPO" : "MAIN_MENU";
-}
-function menuPromptKey(s: IvrSession): "mainMenuFarmer" | "mainMenuFPO" {
-  return s.role === "fpo" ? "mainMenuFPO" : "mainMenuFarmer";
+  return (
+    step === "MAIN_MENU" ||
+    step === "MAIN_MENU_FPO" ||
+    step === "MAIN_MENU_BUYER"
+  );
 }
 
-/* ------------------------------------------------------------------ */
-/*  Component                                                          */
-/* ------------------------------------------------------------------ */
+function menuStepFor(s: IvrSession): IvrStep {
+  if (s.role === "fpo") return "MAIN_MENU_FPO";
+  if (s.role === "buyer") return "MAIN_MENU_BUYER";
+  return "MAIN_MENU";
+}
+
+function menuPromptKey(
+  s: IvrSession
+): "mainMenuFarmer" | "mainMenuFPO" | "mainMenuBuyer" {
+  if (s.role === "fpo") return "mainMenuFPO";
+  if (s.role === "buyer") return "mainMenuBuyer";
+  return "mainMenuFarmer";
+}
 
 export default function IvrClient() {
   const [session, setSession] = useState<IvrSession | null>(null);
@@ -84,6 +111,8 @@ export default function IvrClient() {
   const [callActive, setCallActive] = useState(false);
   const [offers, setOffers] = useState<Offer[]>([]);
   const [offerIdx, setOfferIdx] = useState(0);
+  const [buyerListings, setBuyerListings] = useState<BuyerListing[]>([]);
+  const [buyerListingIdx, setBuyerListingIdx] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -93,12 +122,8 @@ export default function IvrClient() {
     });
   }, [transcript]);
 
-  /* -------- transcript helpers -------- */
   function say(text: string, options?: IvrOption[]) {
-    setTranscript((p) => [
-      ...p,
-      { kind: "prompt", text, options, time: now() },
-    ]);
+    setTranscript((p) => [...p, { kind: "prompt", text, options, time: now() }]);
   }
   function hear(text: string) {
     setTranscript((p) => [...p, { kind: "caller", text, time: now() }]);
@@ -110,12 +135,13 @@ export default function IvrClient() {
     setTranscript((p) => [...p, { kind: "success", text, time: now() }]);
   }
 
-  /* -------- call control -------- */
   function dial() {
     setCallActive(true);
     setTranscript([]);
     setOffers([]);
     setOfferIdx(0);
+    setBuyerListings([]);
+    setBuyerListingIdx(0);
     setInput("");
     const turn = startSession();
     setSession(turn.session);
@@ -129,7 +155,6 @@ export default function IvrClient() {
     note("— Call ended —");
   }
 
-  /* -------- input handling -------- */
   async function handleKey(key: string) {
     if (!session || busy) return;
 
@@ -148,7 +173,6 @@ export default function IvrClient() {
       setInput((prev) => prev + key);
       return;
     }
-
     await submitInput(key);
   }
 
@@ -158,29 +182,20 @@ export default function IvrClient() {
     if (!clean) return;
     setBusy(true);
     try {
-      /* ------------------------------------------------------- */
-      /* STEP 1: ID input                                        */
-      /* ------------------------------------------------------- */
+      /* -------- ID input -------- */
       if (session.step === "ID_INPUT") {
         const digits = clean.replace(/\D/g, "");
-        hear(`KL-${digits}`);
-
+        hear(digits);
         const res = await sendIvrOtp(digits);
         if (!res.ok) {
           say(res.error);
           setBusy(false);
           return;
         }
-
         const data = res.data as { phone: string };
         say(t("otpSending", session.language));
         note(`OTP sent to ${data.phone}`);
-        if (res.demoOtp) {
-          note(
-            `[Demo] OTP is ${res.demoOtp} — in production this is sent via SMS`
-          );
-        }
-
+        if (res.demoOtp) note(`[Demo] OTP is ${res.demoOtp}`);
         setSession({
           ...session,
           krishilinkId: `KL-${digits}`,
@@ -190,34 +205,28 @@ export default function IvrClient() {
         return;
       }
 
-      /* ------------------------------------------------------- */
-      /* STEP 2: OTP verify                                      */
-      /* ------------------------------------------------------- */
+      /* -------- OTP -------- */
       if (session.step === "OTP_VERIFY") {
         const otp = clean.replace(/\D/g, "");
         hear(otp);
-
         if (!session.krishilinkId) {
           say("Session lost. Please call again.");
           setBusy(false);
           return;
         }
-
         const res = await verifyIvrOtp(session.krishilinkId, otp);
         if (!res.ok) {
           say(res.error);
           const turn = advance(session, otp, { otpVerified: false });
           setSession(turn.session);
-          if (!turn.terminal) {
-            say("Please try again. Type the OTP and press #.");
-          } else {
+          if (!turn.terminal) say("Please try again. Type the OTP and press #.");
+          else {
             say(turn.prompt);
             setTimeout(hangUp, 2500);
           }
           setBusy(false);
           return;
         }
-
         const data = res.data as { farmerId: string };
         const turn = advance(session, otp, {
           otpVerified: true,
@@ -233,35 +242,182 @@ export default function IvrClient() {
         return;
       }
 
-      /* ------------------------------------------------------- */
-      /* STEP 3: async branches from main menu (role-aware)      */
-      /* ------------------------------------------------------- */
-      if (isMenuStep(session.step) && clean === "2") {
-        const label =
-          clean === "2"
-            ? session.role === "fpo"
-              ? "2 · Hear group offers"
-              : "2 · Hear offers"
-            : clean;
-        hear(label);
+      /* -------- FARMER/FPO: hear offers -------- */
+      if (isMenuStep(session.step) && clean === "2" && session.role !== "buyer") {
+        hear(session.role === "fpo" ? "2 · Hear group offers" : "2 · Hear offers");
         await handleOffersLoad();
         return;
       }
-      if (isMenuStep(session.step) && clean === "3") {
+
+      /* -------- All roles: prices -------- */
+      if (isMenuStep(session.step) && clean === "3" && session.role !== "buyer") {
         hear("3 · Today's mandi prices");
         await handlePricesLoad();
         return;
       }
-      if (session.step === "LIST_CONFIRM" && clean === "1") {
-        hear("1 · Confirm");
-        await handleCreateListing();
+
+      /* -------- BUYER main menu branches -------- */
+      if (session.step === "MAIN_MENU_BUYER" && clean === "2") {
+        hear("2 · Hear my bids");
+        await handleBuyerBidsLoad();
         return;
       }
+      if (session.step === "MAIN_MENU_BUYER" && clean === "3") {
+        hear("3 · Check my orders");
+        await handleBuyerOrdersLoad();
+        return;
+      }
+
+      /* -------- BUYER crop select -------- */
+      if (session.step === "BUYER_CROP_SELECT") {
+        const crop = CROPS.find((c) => c.key === clean);
+        if (!crop) {
+          say(
+            "Press 1 Tomato, 2 Onion, 3 Potato, 4 Wheat, 5 Rice.",
+            optionsForStep("BUYER_CROP_SELECT", session.language)
+          );
+          setBusy(false);
+          return;
+        }
+        hear(crop.name);
+        await handleBuyerListingsLoad(crop.name);
+        return;
+      }
+
+      /* -------- BUYER listing navigation & bid start -------- */
+      if (session.step === "BUYER_LISTING_LIST") {
+        // User can press "2", "3", "4" to bid on listing 1, 2, 3
+        if (clean === "1" && buyerListingIdx + 1 < buyerListings.length) {
+          const next = buyerListingIdx + 1;
+          setBuyerListingIdx(next);
+          hear("Next listing");
+          readBuyerListing(next, buyerListings);
+          setBusy(false);
+          return;
+        }
+        if (["2", "3", "4"].includes(clean)) {
+          const pickIdx = Number(clean) - 2;
+          const picked = buyerListings[pickIdx];
+          if (picked) {
+            hear(`Bid on listing ${pickIdx + 1}`);
+            startBuyerOffer(picked);
+            setBusy(false);
+            return;
+          }
+        }
+        if (clean === "*") {
+          const turn = advance(session, "*");
+          setSession(turn.session);
+          say(
+            turn.prompt,
+            optionsForStep(turn.session.step, turn.session.language)
+          );
+          setBusy(false);
+          return;
+        }
+        say("Press the number shown to bid, 1 for next, or * to go back.");
+        setBusy(false);
+        return;
+      }
+
+      /* -------- BUYER offer qty -------- */
+      if (session.step === "BUYER_OFFER_QTY") {
+        const digits = clean.replace(/[^0-9.]/g, "");
+        hear(`${digits} kg`);
+        const turn = advance(session, digits);
+        setSession(turn.session);
+        say(turn.prompt, optionsForStep(turn.session.step, turn.session.language));
+        setBusy(false);
+        return;
+      }
+
+      /* -------- BUYER offer price -------- */
+      if (session.step === "BUYER_OFFER_PRICE") {
+        const digits = clean.replace(/[^0-9.]/g, "");
+        hear(`₹${digits}/kg`);
+        const turn = advance(session, digits);
+        setSession(turn.session);
+        say(turn.prompt, optionsForStep(turn.session.step, turn.session.language));
+        setBusy(false);
+        return;
+      }
+
+      /* -------- BUYER offer confirm -------- */
+      if (session.step === "BUYER_OFFER_CONFIRM" && clean === "1") {
+        hear("1 · Confirm");
+        await handleBuyerPlaceOffer();
+        return;
+      }
+      if (session.step === "BUYER_OFFER_CONFIRM" && clean === "2") {
+        hear("2 · Cancel");
+        const turn = advance(session, "2");
+        setSession(turn.session);
+        say(
+          turn.prompt,
+          optionsForStep(turn.session.step, turn.session.language)
+        );
+        setBusy(false);
+        return;
+      }
+
+      /* -------- FARMER/FPO: list confirm -------- */
+      if (session.step === "LIST_CONFIRM" && clean === "1") {
+        hear("1 · Confirm");
+        if (session.role === "fpo") {
+          await handleFpoStartContributions();
+        } else {
+          await handleCreateListing();
+        }
+        return;
+      }
+
+      /* -------- FPO contributions -------- */
+      if (session.step === "FPO_CONTRIB_MEMBER") {
+        const digits = clean.replace(/[^0-9.]/g, "");
+        hear(`${digits} kg`);
+        const turn = advance(session, digits);
+        setSession(turn.session);
+        if (turn.session.step === "FPO_CONTRIB_CONFIRM") {
+          const summary = buildContribSummary(
+            turn.session,
+            turn.session.language
+          );
+          say(
+            summary,
+            optionsForStep("FPO_CONTRIB_CONFIRM", turn.session.language)
+          );
+        } else {
+          say(turn.prompt);
+        }
+        setBusy(false);
+        return;
+      }
+
+      if (session.step === "FPO_CONTRIB_CONFIRM" && clean === "1") {
+        hear("1 · Confirm pool");
+        await handleFpoCreatePool();
+        return;
+      }
+      if (session.step === "FPO_CONTRIB_CONFIRM" && clean === "2") {
+        hear("2 · Cancel");
+        const turn = advance(session, "2");
+        setSession(turn.session);
+        say(
+          turn.prompt,
+          optionsForStep(turn.session.step, turn.session.language)
+        );
+        setBusy(false);
+        return;
+      }
+
+      /* -------- Offers list -------- */
       if (session.step === "OFFERS_LIST" && clean !== "*") {
         hear(clean);
         await handleOfferInput(clean);
         return;
       }
+
+      /* -------- Prices show -------- */
       if (session.step === "PRICES_SHOW" && clean !== "*") {
         hear(clean);
         say("Press * to return to the main menu.");
@@ -269,16 +425,37 @@ export default function IvrClient() {
         return;
       }
 
-      /* ------------------------------------------------------- */
-      /* STEP 4: generic advance                                 */
-      /* ------------------------------------------------------- */
+      /* -------- Bids view / Orders view: back on * -------- */
+      if (
+        (session.step === "BUYER_BIDS_VIEW" ||
+          session.step === "BUYER_ORDERS_VIEW") &&
+        clean === "*"
+      ) {
+        const turn = advance(session, "*");
+        setSession(turn.session);
+        say(
+          turn.prompt,
+          optionsForStep(turn.session.step, turn.session.language)
+        );
+        setBusy(false);
+        return;
+      }
+      if (
+        session.step === "BUYER_BIDS_VIEW" ||
+        session.step === "BUYER_ORDERS_VIEW"
+      ) {
+        say("Press * to return to the main menu.");
+        setBusy(false);
+        return;
+      }
+
+      /* -------- Generic advance -------- */
       const prettyLabel = prettyInputLabel(
         session.step,
         clean,
         session.language
       );
       hear(prettyLabel);
-
       const turn = advance(session, clean);
       setSession(turn.session);
       say(
@@ -293,18 +470,295 @@ export default function IvrClient() {
     }
   }
 
-  /* -------- business-logic branches -------- */
+  /* ================= BUYER: load listings ================= */
+  async function handleBuyerListingsLoad(crop: string) {
+    if (!session) return;
+    const res = await buyerLoadListingsByCrop(crop);
+    if (!res.ok) {
+      say("Could not load listings.");
+      setBusy(false);
+      return;
+    }
+    const data = res.data as { listings: BuyerListing[]; count: number };
+    setBuyerListings(data.listings);
+    setBuyerListingIdx(0);
+
+    if (data.count === 0) {
+      say(
+        "No active listings for this crop right now. Press * to return.",
+        []
+      );
+      setSession({ ...session, step: "BUYER_LISTING_LIST" });
+      setBusy(false);
+      return;
+    }
+
+    say(
+      t("buyerListingList", session.language, { count: data.count })
+    );
+    readBuyerListing(0, data.listings);
+    setSession({
+      ...session,
+      draft: { ...session.draft, crop },
+      step: "BUYER_LISTING_LIST",
+    });
+    setBusy(false);
+  }
+
+  function readBuyerListing(idx: number, list: BuyerListing[]) {
+    const l = list[idx];
+    const bidKey = String(idx + 2); // Listing 1 = bid key "2"
+    say(
+      `Listing ${idx + 1}. ${l.crop}, Grade ${l.grade}, from ${
+        l.district
+      }. ${l.farmerName} asks ₹${l.price}/kg. Available ${l.quantity} kg.`,
+      [
+        { key: bidKey, label: `Bid on listing ${idx + 1}` },
+        ...(idx + 1 < list.length
+          ? [{ key: "1", label: "Next listing" } as IvrOption]
+          : []),
+        { key: "*", label: "Back to menu" },
+      ]
+    );
+  }
+
+  function startBuyerOffer(listing: BuyerListing) {
+    if (!session) return;
+    const newSession: IvrSession = {
+      ...session,
+      draft: {
+        ...session.draft,
+        buyerListingId: listing.id,
+        buyerListingCrop: listing.crop,
+        buyerListingPrice: listing.price,
+        buyerOfferQty: undefined,
+        buyerOfferPrice: undefined,
+      },
+      step: "BUYER_OFFER_QTY",
+    };
+    say(
+      t("buyerOfferQtyAsk", session.language, {
+        crop: listing.crop,
+        price: listing.price,
+      })
+    );
+    setSession(newSession);
+  }
+
+  async function handleBuyerPlaceOffer() {
+    if (!session || !session.farmerId) return;
+    const listingId = session.draft.buyerListingId;
+    const price = session.draft.buyerOfferPrice;
+    const qty = session.draft.buyerOfferQty;
+
+    if (!listingId || !price || !qty) {
+      say("Missing offer details. Please try again.");
+      setBusy(false);
+      return;
+    }
+
+    const res = await buyerPlaceOffer(session.farmerId, listingId, price, qty);
+    if (!res.ok) {
+      say("Could not place offer. " + res.error);
+      setBusy(false);
+      return;
+    }
+
+    success("Offer placed successfully");
+    say(t("buyerOfferPlaced", session.language));
+
+    const nextStep = menuStepFor(session);
+    const nextSession: IvrSession = {
+      ...session,
+      draft: {},
+      step: nextStep,
+    };
+    setSession(nextSession);
+    say(
+      t(menuPromptKey(session), session.language),
+      optionsForStep(nextStep, session.language)
+    );
+    setBusy(false);
+  }
+
+  async function handleBuyerBidsLoad() {
+    if (!session || !session.farmerId) return;
+    const res = await buyerLoadBids(session.farmerId);
+    if (!res.ok) {
+      say("Could not load bids.");
+      setBusy(false);
+      return;
+    }
+    const data = res.data as {
+      bids: {
+        id: string;
+        crop: string;
+        price: number;
+        quantity: number;
+        status: string;
+      }[];
+      count: number;
+    };
+
+    if (data.count === 0) {
+      say(t("buyerNoBids", session.language), [
+        { key: "*", label: "Main menu" },
+      ]);
+      setSession({ ...session, step: "BUYER_BIDS_VIEW" });
+      setBusy(false);
+      return;
+    }
+
+    say(t("buyerBidsIntro", session.language, { count: data.count }));
+    data.bids.forEach((b, i) => {
+      say(
+        t("buyerBidRead", session.language, {
+          n: i + 1,
+          total: data.count,
+          crop: b.crop,
+          price: b.price,
+          qty: b.quantity,
+          status: b.status.replace(/_/g, " "),
+        })
+      );
+    });
+    say(t("buyerBidsDone", session.language), [
+      { key: "*", label: "Main menu" },
+    ]);
+    setSession({ ...session, step: "BUYER_BIDS_VIEW" });
+    setBusy(false);
+  }
+
+  async function handleBuyerOrdersLoad() {
+    if (!session || !session.farmerId) return;
+    const res = await buyerLoadOrders(session.farmerId);
+    if (!res.ok) {
+      say("Could not load orders.");
+      setBusy(false);
+      return;
+    }
+    const data = res.data as {
+      orders: { id: string; crop: string; total: number; status: string }[];
+      count: number;
+    };
+
+    if (data.count === 0) {
+      say(t("buyerNoOrders", session.language), [
+        { key: "*", label: "Main menu" },
+      ]);
+      setSession({ ...session, step: "BUYER_ORDERS_VIEW" });
+      setBusy(false);
+      return;
+    }
+
+    say(t("buyerOrdersIntro", session.language, { count: data.count }));
+    data.orders.forEach((o, i) => {
+      say(
+        t("buyerOrderRead", session.language, {
+          n: i + 1,
+          total: data.count,
+          crop: o.crop,
+          total_amt: o.total.toLocaleString("en-IN"),
+          status: o.status.replace(/_/g, " "),
+        })
+      );
+    });
+    say(t("buyerOrdersDone", session.language), [
+      { key: "*", label: "Main menu" },
+    ]);
+    setSession({ ...session, step: "BUYER_ORDERS_VIEW" });
+    setBusy(false);
+  }
+
+  /* ================= FPO: contributions ================= */
+  async function handleFpoStartContributions() {
+    if (!session || !session.farmerId) return;
+    const res = await fpoLoadMembers(session.farmerId);
+    if (!res.ok) {
+      say("Could not load members. " + res.error);
+      setBusy(false);
+      return;
+    }
+    const data = res.data as { members: FpoMember[] };
+    const members = data.members ?? [];
+
+    if (members.length === 0) {
+      say(
+        "You have no active members yet. Please add members from the web portal first."
+      );
+      setBusy(false);
+      return;
+    }
+
+    const newSession: IvrSession = {
+      ...session,
+      fpoMembers: members,
+      draft: {
+        ...session.draft,
+        contributions: [],
+        memberIdx: 0,
+      },
+      step: "FPO_CONTRIB_MEMBER",
+    };
+
+    const first = members[0];
+    say(
+      `Now let's record contributions. Member 1 of ${
+        members.length + 1
+      }: ${first.name}.`
+    );
+    say(`How many kg is ${first.name} contributing? Type and press #.`);
+    setSession(newSession);
+    setBusy(false);
+  }
+
+  async function handleFpoCreatePool() {
+    if (!session || !session.farmerId) return;
+    const contributions = session.draft.contributions ?? [];
+
+    const res = await fpoCreatePoolWithContributions(session.farmerId, {
+      crop: session.draft.crop,
+      quantityKg: session.draft.quantityKg,
+      grade: session.draft.grade,
+      pricePerKg: session.draft.pricePerKg,
+      contributions,
+    });
+
+    if (!res.ok) {
+      say("Sorry, could not create pool. " + res.error);
+      setBusy(false);
+      return;
+    }
+
+    success("FPO pool created — shares recorded");
+    say(t("poolCreated", session.language));
+
+    const nextStep = menuStepFor(session);
+    const nextSession: IvrSession = {
+      ...session,
+      draft: {},
+      fpoMembers: [],
+      step: nextStep,
+    };
+    setSession(nextSession);
+    say(
+      t(menuPromptKey(session), session.language),
+      optionsForStep(nextStep, session.language)
+    );
+    setBusy(false);
+  }
+
+  /* ================= FARMER: create listing ================= */
   async function handleCreateListing() {
     if (!session || !session.farmerId) return;
-    const res = await finalizeIvrListing(session.farmerId, session.draft);
+    const res = await farmerCreateListing(session.farmerId, session.draft);
     if (!res.ok) {
       say("Sorry, could not save. " + res.error);
       setBusy(false);
       return;
     }
-    success("Crop listed successfully");
+    success("Crop listed on your farm account");
     say(t("listingCreated", session.language));
-
     const nextStep = menuStepFor(session);
     const nextSession = { ...session, draft: {}, step: nextStep };
     setSession(nextSession);
@@ -315,9 +769,15 @@ export default function IvrClient() {
     setBusy(false);
   }
 
+  /* ================= FARMER/FPO: offers ================= */
   async function handleOffersLoad() {
     if (!session || !session.farmerId) return;
-    const res = await loadIvrOffers(session.farmerId);
+
+    const res =
+      session.role === "fpo"
+        ? await fpoLoadOffers(session.farmerId)
+        : await farmerLoadOffers(session.farmerId);
+
     if (!res.ok) {
       say("Could not load offers.");
       setBusy(false);
@@ -354,14 +814,9 @@ export default function IvrClient() {
       { key: "3", label: "Reject" },
     ];
     say(
-      t("offerRead", s.language, {
-        n: idx + 1,
-        total: list.length,
-        buyer: o.buyerName,
-        price: o.pricePerKg,
-        qty: o.quantityKg,
-        net: o.netPerKg,
-      }),
+      `Offer ${idx + 1} of ${list.length}. Buyer ${o.buyerName}. ₹${
+        o.pricePerKg
+      }/kg for ${o.quantityKg} kg. Net ₹${o.netPerKg.toFixed(2)}/kg.`,
       options
     );
   }
@@ -381,7 +836,7 @@ export default function IvrClient() {
     if (cmd === "1") {
       const next = offerIdx + 1;
       if (next >= offers.length) {
-        say(t("offersDone", session.language));
+        say("That was the last offer.");
         setBusy(false);
         return;
       }
@@ -396,14 +851,21 @@ export default function IvrClient() {
         return;
       }
       const o = offers[offerIdx];
-      const res = await acceptIvrOffer(session.farmerId, o.id);
+      const res =
+        session.role === "fpo"
+          ? await fpoAcceptPoolOffer(session.farmerId, o.id)
+          : await farmerAcceptOffer(session.farmerId, o.id);
+
       if (!res.ok) {
         say("Sorry, could not accept. " + res.error);
         setBusy(false);
         return;
       }
-      success("Offer accepted");
-      say(t("accepted", session.language));
+      success(
+        session.role === "fpo"
+          ? "Pool offer accepted — payment will split"
+          : "Offer accepted"
+      );
 
       const nextStep = menuStepFor(session);
       const nextSession = { ...session, step: nextStep };
@@ -416,11 +878,11 @@ export default function IvrClient() {
       return;
     }
     if (cmd === "3") {
-      say(t("rejected", session.language));
+      say("Offer rejected.");
       setBusy(false);
       return;
     }
-    say(t("unknown", session.language));
+    say("Sorry, I didn't understand.");
     setBusy(false);
   }
 
@@ -435,38 +897,43 @@ export default function IvrClient() {
     const data = res.data as {
       prices: { crop: string; modal_price: number }[];
     };
-    say(t("pricesIntro", session.language));
+    say("Today's mandi prices:");
     data.prices.forEach((p) => {
       say(`• ${p.crop}: ₹${p.modal_price} / kg`);
     });
-    say(t("pricesDone", session.language), [
-      { key: "*", label: "Back to main menu" },
-    ]);
+    say("Press * to return.", [{ key: "*", label: "Back to menu" }]);
     setSession({ ...session, step: "PRICES_SHOW" });
     setBusy(false);
   }
 
-  /* -------- derived UI state -------- */
   const numericMode = session ? isNumericStep(session.step) : false;
   const inputType = session ? inputTypeForStep(session.step) : "menu";
 
   const promptLine = useMemo(() => {
     if (!session) return null;
-    if (session.step === "ID_INPUT") return "Enter your 6-digit KrishiLink ID";
+    if (session.step === "ID_INPUT") return "Enter your 6-digit ID";
     if (session.step === "OTP_VERIFY") return "Enter the 6-digit OTP";
-    if (session.step === "LIST_QUANTITY") return "Enter quantity in kilograms";
-    if (session.step === "LIST_PRICE") return "Enter expected price per kg";
+    if (session.step === "LIST_QUANTITY")
+      return session.role === "fpo"
+        ? "Total pool quantity (kg)"
+        : "Quantity (kg)";
+    if (session.step === "LIST_PRICE") return "Expected price (₹/kg)";
+    if (session.step === "FPO_CONTRIB_MEMBER") {
+      const idx = session.draft.memberIdx ?? 0;
+      const m = session.fpoMembers[idx];
+      return m ? `${m.name}'s contribution (kg)` : "Head contribution (kg)";
+    }
+    if (session.step === "BUYER_OFFER_QTY") return "Quantity to buy (kg)";
+    if (session.step === "BUYER_OFFER_PRICE") return "Your offer price (₹/kg)";
     return null;
   }, [session]);
 
   return (
     <div className="grid gap-8 lg:grid-cols-[400px_1fr]">
-      {/* ================= PHONE FRAME ================= */}
       <div className="mx-auto w-full max-w-[400px] lg:sticky lg:top-24 lg:self-start">
         <div className="relative rounded-[44px] border-[10px] border-[#0F1F1A] bg-[#0F1F1A] p-2 shadow-[0_40px_80px_-30px_rgba(0,0,0,0.4)]">
           <div className="rounded-[36px] bg-gradient-to-b from-[#F8F9FA] to-[#EAF5EE] p-5">
             <div className="mx-auto mb-4 h-1.5 w-24 rounded-full bg-[#0F1F1A]/20" />
-
             <div className="mb-4 flex items-center justify-between text-[10px] text-[#6B7A74]">
               <span className="font-medium">KrishiLink IVR</span>
               <span className="flex items-center gap-1">
@@ -489,7 +956,6 @@ export default function IvrClient() {
               <p className="mt-1 text-[11px] text-[#6B7A74]">
                 Toll-free · No app · No internet
               </p>
-
               {callActive ? (
                 <button
                   onClick={hangUp}
@@ -514,15 +980,16 @@ export default function IvrClient() {
                 </p>
                 <div className="mt-2 flex items-baseline gap-1 font-display text-3xl font-bold text-[#1B4D3E]">
                   {session?.step === "ID_INPUT" && (
-                    <span className="text-[#6B7A74]">KL-</span>
+                    <span className="text-[#6B7A74]">
+                      {session.role === "fpo" ? "KF-" : "KL-"}
+                    </span>
                   )}
                   <span className="flex-1 tracking-[0.3em]">
                     {input || <span className="text-[#A5D6A7]">______</span>}
                   </span>
                 </div>
                 <p className="mt-2 text-[10px] text-[#6B7A74]">
-                  Type digits · press <strong>#</strong> to submit · press{" "}
-                  <strong>*</strong> to clear
+                  Type digits · press <strong>#</strong> · <strong>*</strong> clears
                 </p>
               </div>
             )}
@@ -560,17 +1027,10 @@ export default function IvrClient() {
                 <ButtonSpinner size={12} /> Processing…
               </div>
             )}
-
-            {callActive && inputType === "numeric" && (
-              <p className="mt-3 text-center text-[10px] text-[#6B7A74]">
-                Tip: You can also tap an option on the right side
-              </p>
-            )}
           </div>
         </div>
       </div>
 
-      {/* ================= TRANSCRIPT ================= */}
       <div className="flex flex-col overflow-hidden rounded-[24px] border border-[#E4EBE6] bg-white">
         <div className="flex items-center justify-between border-b border-[#E4EBE6] px-6 py-4">
           <div className="flex items-center gap-2">
@@ -593,7 +1053,7 @@ export default function IvrClient() {
                 Live transcript
               </p>
               <p className="text-[10px] text-[#6B7A74]">
-                {transcript.length} turns · every action writes to the database
+                {transcript.length} turns · Farmer · Buyer · FPO
               </p>
             </div>
           </div>
@@ -610,7 +1070,18 @@ export default function IvrClient() {
           style={{ maxHeight: 640, minHeight: 520 }}
         >
           {transcript.length === 0 ? (
-            <EmptyState />
+            <div className="flex h-full flex-col items-center justify-center text-center">
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#EAF5EE] text-3xl">
+                📞
+              </div>
+              <p className="mt-4 text-sm font-medium text-[#1B4D3E]">
+                Ready to simulate a call
+              </p>
+              <p className="mt-1 max-w-sm text-xs text-[#6B7A74]">
+                Press <strong>Dial now</strong>. Farmer lists crops. Buyer
+                browses & places offers. FPO pools members and splits revenue.
+              </p>
+            </div>
           ) : (
             transcript.map((line, i) => (
               <TranscriptLine
@@ -623,28 +1094,6 @@ export default function IvrClient() {
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*  Sub-components                                                     */
-/* ------------------------------------------------------------------ */
-
-function EmptyState() {
-  return (
-    <div className="flex h-full flex-col items-center justify-center text-center">
-      <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#EAF5EE] text-3xl">
-        📞
-      </div>
-      <p className="mt-4 text-sm font-medium text-[#1B4D3E]">
-        Ready to simulate a call
-      </p>
-      <p className="mt-1 max-w-sm text-xs text-[#6B7A74]">
-        Press <strong>Dial now</strong> to start. You&apos;ll need a KrishiLink
-        ID — any farmer, buyer, or FPO account works. The demo shows the OTP on
-        screen.
-      </p>
     </div>
   );
 }
@@ -667,7 +1116,6 @@ function TranscriptLine({
       </div>
     );
   }
-
   if (line.kind === "success") {
     return (
       <div className="flex justify-center">
@@ -677,12 +1125,11 @@ function TranscriptLine({
       </div>
     );
   }
-
   if (line.kind === "caller") {
     return (
       <div className="flex justify-end">
         <div className="max-w-[80%] rounded-2xl rounded-tr-sm bg-[#1B4D3E] px-4 py-2.5 text-sm text-white">
-          <p className="font-medium">{line.text}</p>
+          <p className="font-medium whitespace-pre-line">{line.text}</p>
           <p className="mt-1 text-[9px] text-white/60">
             👤 Caller · {line.time}
           </p>
@@ -690,17 +1137,15 @@ function TranscriptLine({
       </div>
     );
   }
-
   return (
     <div className="flex justify-start">
       <div className="max-w-[85%] space-y-3">
         <div className="rounded-2xl rounded-tl-sm bg-[#F8F9FA] px-4 py-3 text-sm text-[#0F1F1A]">
-          <p className="leading-relaxed">{line.text}</p>
+          <p className="leading-relaxed whitespace-pre-line">{line.text}</p>
           <p className="mt-1.5 text-[9px] text-[#6B7A74]">
             🤖 IVR · {line.time}
           </p>
         </div>
-
         {line.options && line.options.length > 0 && (
           <div className="grid gap-2 sm:grid-cols-2">
             {line.options.map((opt) => (
@@ -735,10 +1180,6 @@ function TranscriptLine({
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  Utility                                                            */
-/* ------------------------------------------------------------------ */
-
 function prettyInputLabel(
   step: IvrStep,
   raw: string,
@@ -746,7 +1187,6 @@ function prettyInputLabel(
 ): string {
   const L = (en: string, hi: string, kn: string) =>
     lang === "hi" ? hi : lang === "kn" ? kn : en;
-
   switch (step) {
     case "WELCOME":
       return raw === "1" ? "English" : raw === "2" ? "हिन्दी" : "ಕನ್ನಡ";
@@ -755,6 +1195,7 @@ function prettyInputLabel(
       if (raw === "2") return L("Buyer", "खरीदार", "ಖರೀದಿದಾರ");
       if (raw === "3") return L("FPO", "एफपीओ", "ಎಫ್‌ಪಿಒ");
       return raw;
+    case "BUYER_CROP_SELECT":
     case "LIST_CROP": {
       const c = CROPS.find((x) => x.key === raw);
       return c ? c.name : raw;
@@ -762,23 +1203,36 @@ function prettyInputLabel(
     case "LIST_QUALITY":
       return raw === "1" ? "Grade A" : raw === "2" ? "Grade B" : "Grade C";
     case "LIST_CONFIRM":
+    case "BUYER_OFFER_CONFIRM":
+    case "FPO_CONTRIB_CONFIRM":
       return raw === "1" ? "Confirm" : "Cancel";
     case "MAIN_MENU":
-    case "MAIN_MENU_FPO": {
-      const map: Record<string, string> = {
-        "1":
-          step === "MAIN_MENU_FPO"
-            ? L("List a member's crop", "सदस्य की फसल", "ಸದಸ್ಯರ ಬೆಳೆ")
-            : L("List my crop", "फसल सूचीबद्ध करें", "ಬೆಳೆ ಪಟ್ಟಿ ಮಾಡಿ"),
-        "2":
-          step === "MAIN_MENU_FPO"
-            ? L("Hear group offers", "समूह ऑफर सुनें", "ಗುಂಪು ಆಫರ್")
-            : L("Hear offers", "ऑफर सुनें", "ಆಫರ್ ಕೇಳಿ"),
-        "3": L("Today's mandi prices", "आज के मंडी भाव", "ಇಂದಿನ ಮಂಡಿ ದರ"),
-        "0": L("Talk to an operator", "ऑपरेटर से बात करें", "ಆಪರೇಟರ್"),
-      };
-      return map[raw] ?? raw;
-    }
+      return (
+        {
+          "1": "List my crop",
+          "2": "Hear offers",
+          "3": "Today's mandi prices",
+          "0": "Talk to an operator",
+        }[raw] ?? raw
+      );
+    case "MAIN_MENU_FPO":
+      return (
+        {
+          "1": "List a member's crop",
+          "2": "Hear group offers",
+          "3": "Today's mandi prices",
+          "0": "Talk to an operator",
+        }[raw] ?? raw
+      );
+    case "MAIN_MENU_BUYER":
+      return (
+        {
+          "1": "Browse crops",
+          "2": "Hear my bids",
+          "3": "Check my orders",
+          "0": "Talk to an operator",
+        }[raw] ?? raw
+      );
     default:
       return raw;
   }
