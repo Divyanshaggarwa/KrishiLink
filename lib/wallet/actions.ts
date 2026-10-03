@@ -12,7 +12,7 @@ export type WalletActionResult = {
 };
 
 /* ------------------------------------------------------------------ */
-/*  Top up wallet                                                     */
+/*  Top up                                                            */
 /* ------------------------------------------------------------------ */
 export async function topUpWallet(
   _prev: WalletActionResult,
@@ -47,7 +47,7 @@ export async function topUpWallet(
 }
 
 /* ------------------------------------------------------------------ */
-/*  Withdraw to bank                                                  */
+/*  Withdraw                                                          */
 /* ------------------------------------------------------------------ */
 export async function withdrawFromWallet(
   _prev: WalletActionResult,
@@ -80,9 +80,9 @@ export async function withdrawFromWallet(
   return { ok: true };
 }
 
-/* ------------------------------------------------------------------ */
-/*  Pay escrow (30%) from wallet — BUYER only, with idempotency       */
-/* ------------------------------------------------------------------ */
+/* ==================================================================== */
+/*  PAY ESCROW (30%) — Buyer pays, SELLER GETS 30% OF NET IMMEDIATELY   */
+/* ==================================================================== */
 export async function payEscrowFromWallet(
   _prev: WalletActionResult,
   formData: FormData
@@ -95,13 +95,12 @@ export async function payEscrowFromWallet(
   const orderId = String(formData.get("orderId") || "");
   if (!orderId) return { ok: false, error: "Missing order." };
 
-  // Use admin client to bypass any RLS edge cases
   const admin = createAdminClient();
 
   const { data: order } = await admin
     .from("transactions")
     .select(
-      "id, buyer_id, farmer_id, pool_id, gross_amount, escrow_amount_paid, status"
+      "id, buyer_id, farmer_id, pool_id, gross_amount, net_amount, escrow_amount_paid, status, listing:listings(crop), pool:fpo_pools(crop, fpo_id)"
     )
     .eq("id", orderId)
     .single();
@@ -110,50 +109,95 @@ export async function payEscrowFromWallet(
     return { ok: false, error: "Order not found." };
   }
 
-  // === Idempotency guard ===
+  // Idempotency: already paid
+  if (
+    order.status === "escrow_paid" ||
+    order.status === "in_transit" ||
+    order.status === "delivered" ||
+    order.status === "completed"
+  ) {
+    return { ok: true };
+  }
   if (order.status !== "escrow_pending") {
-    if (
-      order.status === "escrow_paid" ||
-      order.status === "in_transit" ||
-      order.status === "delivered" ||
-      order.status === "completed"
-    ) {
-      // Already paid — treat as success, do nothing
-      return { ok: true };
-    }
-    return { ok: false, error: "Escrow cannot be paid in this state." };
+    return { ok: false, error: `Cannot pay escrow from status: ${order.status}` };
   }
   if (Number(order.escrow_amount_paid) > 0) {
-    // Already paid per field — heal the status
-    await admin
-      .from("transactions")
-      .update({ status: "escrow_paid", updated_at: new Date().toISOString() })
-      .eq("id", orderId);
-    revalidatePath("/buyer/orders");
-    revalidatePath("/wallet");
     return { ok: true };
   }
 
-  const advance = Number((Number(order.gross_amount) * 0.3).toFixed(2));
+  const grossAmount = Number(order.gross_amount);
+  const netAmount = Number(order.net_amount || order.gross_amount);
+  const advance = Number((grossAmount * 0.3).toFixed(2));
+  const netAdvance = Number((netAmount * 0.3).toFixed(2));
 
-  // 1. Debit buyer wallet (RPC with SECURITY DEFINER — works fine)
+  const listing = Array.isArray(order.listing) ? order.listing[0] : order.listing;
+  const pool = Array.isArray(order.pool) ? order.pool[0] : order.pool;
+  const crop = listing?.crop ?? pool?.crop ?? "Order";
+
+  /* -------- 1. Debit buyer -------- */
   const { error: debitErr } = await admin.rpc("wallet_debit", {
     p_user_id: profile.id,
     p_amount: advance,
     p_kind: "escrow_paid",
     p_reference_id: order.id,
-    p_description: `30% escrow on order #${order.id.slice(0, 8)}`,
+    p_description: `30% escrow on order #${order.id.slice(0, 8)} (${crop})`,
   });
 
   if (debitErr) {
-    // Unique constraint violation = already processed
     if (debitErr.message.includes("duplicate key")) {
       return { ok: true };
     }
     return { ok: false, error: debitErr.message };
   }
 
-  // 2. Update transaction
+  /* -------- 2. Credit seller(s) with 30% of net -------- */
+
+  if (order.pool_id && pool?.fpo_id) {
+    // FPO pool → credit FPO wallet with 30% of net
+    const { error: fpoErr } = await admin.rpc("fpo_wallet_credit", {
+      p_fpo_id: pool.fpo_id,
+      p_amount: netAdvance,
+      p_kind: "pool_received",
+      p_reference_id: order.id,
+      p_description: `30% advance · ${crop} pool #${order.id.slice(0, 8)}`,
+    });
+
+    if (fpoErr) {
+      return { ok: false, error: `FPO credit failed: ${fpoErr.message}` };
+    }
+
+    // Notify FPO head
+    await admin.from("notifications").insert({
+      user_id: pool.fpo_id,
+      kind: "escrow_paid",
+      title: "30% advance received on FPO pool",
+      body: `₹${netAdvance.toLocaleString("en-IN")} credited to FPO wallet from ${crop} pool sale.`,
+      link: "/farmer/fpo/dashboard/wallet",
+    });
+  } else {
+    // Regular listing → credit farmer with 30% of net
+    const { error: farmerErr } = await admin.rpc("wallet_credit", {
+      p_user_id: order.farmer_id,
+      p_amount: netAdvance,
+      p_kind: "payout_received",
+      p_reference_id: order.id,
+      p_description: `30% advance · ${crop} order #${order.id.slice(0, 8)}`,
+    });
+
+    if (farmerErr) {
+      return { ok: false, error: `Farmer credit failed: ${farmerErr.message}` };
+    }
+
+    await admin.from("notifications").insert({
+      user_id: order.farmer_id,
+      kind: "escrow_paid",
+      title: "30% advance received",
+      body: `₹${netAdvance.toLocaleString("en-IN")} credited to your wallet for ${crop} order. Balance releases after delivery.`,
+      link: "/wallet",
+    });
+  }
+
+  /* -------- 3. Update transaction -------- */
   const { error: updErr } = await admin
     .from("transactions")
     .update({
@@ -164,27 +208,21 @@ export async function payEscrowFromWallet(
     })
     .eq("id", orderId);
 
-  if (updErr) return { ok: false, error: `Refund needed: ${updErr.message}` };
-
-  // 3. Notify seller
-  await admin.from("notifications").insert({
-    user_id: order.farmer_id,
-    kind: "escrow_paid",
-    title: "30% advance received",
-    body: `Buyer paid ₹${advance.toLocaleString("en-IN")} advance. Ready to ship.`,
-    link: order.pool_id ? "/farmer/fpo/dashboard/offers" : "/farmer/orders",
-  });
+  if (updErr) {
+    return { ok: false, error: `Update failed: ${updErr.message}` };
+  }
 
   revalidatePath("/wallet");
   revalidatePath("/buyer/orders");
   revalidatePath("/farmer/orders");
   revalidatePath("/farmer/fpo/dashboard");
+  revalidatePath("/farmer/fpo/dashboard/wallet");
   return { ok: true };
 }
 
-/* ------------------------------------------------------------------ */
-/*  Confirm delivery → release final 70% — with idempotency + FPO     */
-/* ------------------------------------------------------------------ */
+/* ==================================================================== */
+/*  CONFIRM DELIVERY (70%) — Buyer pays, SELLER GETS REMAINING 70%      */
+/* ==================================================================== */
 export async function confirmDeliveryFromWallet(
   _prev: WalletActionResult,
   formData: FormData
@@ -197,13 +235,12 @@ export async function confirmDeliveryFromWallet(
   const orderId = String(formData.get("orderId") || "");
   if (!orderId) return { ok: false, error: "Missing order." };
 
-  // Use admin client — RLS is bypassed but we still check ownership below
   const admin = createAdminClient();
 
   const { data: order } = await admin
     .from("transactions")
     .select(
-      "id, buyer_id, farmer_id, pool_id, gross_amount, net_amount, escrow_amount_paid, final_amount_paid, status"
+      "id, buyer_id, farmer_id, pool_id, gross_amount, net_amount, escrow_amount_paid, final_amount_paid, status, listing:listings(crop), pool:fpo_pools(crop, fpo_id)"
     )
     .eq("id", orderId)
     .single();
@@ -212,13 +249,9 @@ export async function confirmDeliveryFromWallet(
     return { ok: false, error: "Order not found." };
   }
 
-  // === Idempotency guard ===
-  if (order.status === "completed") {
-    // Already completed — nothing to do
-    return { ok: true };
-  }
+  // Idempotency
+  if (order.status === "completed") return { ok: true };
   if (Number(order.final_amount_paid) > 0) {
-    // Final already charged — heal status
     await admin
       .from("transactions")
       .update({ status: "completed", updated_at: new Date().toISOString() })
@@ -228,93 +261,75 @@ export async function confirmDeliveryFromWallet(
     return { ok: true };
   }
   if (order.status !== "delivered") {
-    return {
-      ok: false,
-      error: "Seller hasn't marked this as delivered yet.",
-    };
+    return { ok: false, error: "Seller hasn't marked this as delivered yet." };
   }
 
-  const final = Number(
-    (Number(order.gross_amount) - Number(order.escrow_amount_paid || 0)).toFixed(
-      2
-    )
+  const grossAmount = Number(order.gross_amount);
+  const netAmount = Number(order.net_amount || order.gross_amount);
+  const finalGross = Number(
+    (grossAmount - Number(order.escrow_amount_paid || 0)).toFixed(2)
   );
+  const finalNet = Number((netAmount * 0.7).toFixed(2));
 
-  // 1. Debit buyer wallet
+  const listing = Array.isArray(order.listing) ? order.listing[0] : order.listing;
+  const pool = Array.isArray(order.pool) ? order.pool[0] : order.pool;
+  const crop = listing?.crop ?? pool?.crop ?? "Order";
+
+  /* -------- 1. Debit buyer 70% -------- */
   const { error: debitErr } = await admin.rpc("wallet_debit", {
     p_user_id: profile.id,
-    p_amount: final,
+    p_amount: finalGross,
     p_kind: "final_paid",
     p_reference_id: order.id,
-    p_description: `Final 70% on order #${order.id.slice(0, 8)}`,
+    p_description: `Final 70% on order #${order.id.slice(0, 8)} (${crop})`,
   });
 
   if (debitErr) {
-    if (debitErr.message.includes("duplicate key")) {
-      return { ok: true };
-    }
+    if (debitErr.message.includes("duplicate key")) return { ok: true };
     return { ok: false, error: debitErr.message };
   }
 
-  /* ================================================================ */
-  /*  POOL → FPO wallet → distribute to members                        */
-  /* ================================================================ */
-  if (order.pool_id) {
-    const { data: pool } = await admin
-      .from("fpo_pools")
-      .select("fpo_id, crop")
-      .eq("id", order.pool_id)
-      .maybeSingle();
+  /* -------- 2. Credit seller(s) with remaining 70% of net -------- */
 
-    if (!pool) {
-      return {
-        ok: false,
-        error: "Pool not found — contact support with order ID " + order.id.slice(0, 8),
-      };
-    }
-
-    // Credit FPO wallet with net pool amount
-    const { error: fpoCreditErr } = await admin.rpc("fpo_wallet_credit", {
+  if (order.pool_id && pool?.fpo_id) {
+    // FPO pool → credit FPO wallet with 70%
+    const { error: fpoErr } = await admin.rpc("fpo_wallet_credit", {
       p_fpo_id: pool.fpo_id,
-      p_amount: Number(order.net_amount),
+      p_amount: finalNet,
       p_kind: "pool_received",
       p_reference_id: order.id,
-      p_description: `Pool sale · ${pool.crop} · #${order.id.slice(0, 8)}`,
+      p_description: `70% final · ${crop} pool #${order.id.slice(0, 8)}`,
     });
 
-    if (fpoCreditErr) {
-      return {
-        ok: false,
-        error: `FPO credit failed: ${fpoCreditErr.message}`,
-      };
+    if (fpoErr) {
+      return { ok: false, error: `FPO credit failed: ${fpoErr.message}` };
     }
 
-    // Get payout rows and distribute to members
+    // Now distribute FULL payouts to members (100% of their share)
+    // FPO wallet has received 30% + 70% = 100% of net now
     const { data: payouts } = await admin
       .from("fpo_pool_payouts")
       .select("id, member_id, net_payout, quantity_kg, share_pct")
-      .eq("transaction_id", order.id);
+      .eq("transaction_id", order.id)
+      .eq("status", "pending");
 
     if (payouts && payouts.length > 0) {
       for (const p of payouts) {
-        // Debit from FPO wallet
+        // Debit FPO wallet, credit member personal wallet
         await admin.rpc("fpo_wallet_debit", {
           p_fpo_id: pool.fpo_id,
           p_amount: Number(p.net_payout),
           p_kind: "member_distribution",
           p_reference_id: order.id,
-          p_description: `Share → member (${p.quantity_kg} kg · ${Number(
-            p.share_pct
-          ).toFixed(1)}%)`,
+          p_description: `Share → member (${p.quantity_kg} kg · ${Number(p.share_pct).toFixed(1)}%)`,
         });
 
-        // Credit member's personal wallet
         await admin.rpc("wallet_credit", {
           p_user_id: p.member_id,
           p_amount: Number(p.net_payout),
           p_kind: "pool_share",
           p_reference_id: order.id,
-          p_description: `Pool share · ${pool.crop}`,
+          p_description: `Pool share · ${crop}`,
         });
 
         await admin
@@ -325,38 +340,40 @@ export async function confirmDeliveryFromWallet(
         await admin.from("notifications").insert({
           user_id: p.member_id,
           kind: "payout_released",
-          title: `${pool.crop} pool share released`,
-          body: `₹${Number(p.net_payout).toLocaleString("en-IN")} credited.`,
+          title: `${crop} pool share released`,
+          body: `₹${Number(p.net_payout).toLocaleString("en-IN")} credited to your wallet.`,
           link: "/wallet",
         });
       }
     }
   } else {
-    /* ============================================================== */
-    /*  LISTING → farmer personal wallet                              */
-    /* ============================================================== */
-    await admin.rpc("wallet_credit", {
+    // Regular listing → credit farmer with 70%
+    const { error: farmerErr } = await admin.rpc("wallet_credit", {
       p_user_id: order.farmer_id,
-      p_amount: Number(order.net_amount),
+      p_amount: finalNet,
       p_kind: "payout_received",
       p_reference_id: order.id,
-      p_description: `Order payout #${order.id.slice(0, 8)}`,
+      p_description: `70% final · ${crop} order #${order.id.slice(0, 8)}`,
     });
+
+    if (farmerErr) {
+      return { ok: false, error: `Farmer credit failed: ${farmerErr.message}` };
+    }
 
     await admin.from("notifications").insert({
       user_id: order.farmer_id,
       kind: "payout_released",
-      title: "Payment released",
-      body: `₹${Number(order.net_amount).toLocaleString("en-IN")} credited.`,
+      title: "Final payment released",
+      body: `₹${finalNet.toLocaleString("en-IN")} credited. Order complete.`,
       link: "/wallet",
     });
   }
 
-  // 3. Mark complete
+  /* -------- 3. Mark complete -------- */
   const { error: updErr } = await admin
     .from("transactions")
     .update({
-      final_amount_paid: final,
+      final_amount_paid: finalGross,
       final_paid_at: new Date().toISOString(),
       status: "completed",
       updated_at: new Date().toISOString(),
@@ -365,7 +382,7 @@ export async function confirmDeliveryFromWallet(
 
   if (updErr) return { ok: false, error: updErr.message };
 
-  // 4. Trust bumps
+  /* -------- 4. Trust bumps -------- */
   await admin.rpc("bump_trust", { p_user: order.farmer_id, p_delta: 2 });
   await admin.rpc("bump_trust", { p_user: order.buyer_id, p_delta: 2 });
 
