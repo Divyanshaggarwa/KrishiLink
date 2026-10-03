@@ -27,6 +27,18 @@ export default async function AdminDashboard() {
     supabase.from("transactions").select("*", { count: "exact", head: true }),
   ]);
 
+  // Platform revenue = sum of admin wallet credits from platform fees
+  const { data: platformTxns } = await supabase
+    .from("wallet_transactions")
+    .select("amount")
+    .eq("user_id", profile.id)
+    .in("kind", ["adjustment"]);
+
+  const platformRevenue = (platformTxns || []).reduce(
+    (sum, t) => sum + Number(t.amount),
+    0
+  );
+
   return (
     <DashboardShell
       profile={profile}
@@ -42,15 +54,26 @@ export default async function AdminDashboard() {
         <Stat label="Listings" value={listings.count ?? 0} />
         <Stat label="Offers" value={offers.count ?? 0} />
         <Stat label="Transactions" value={txns.count ?? 0} />
+        <Stat
+          label="Platform revenue"
+          value={`₹${platformRevenue.toLocaleString("en-IN")}`}
+          accent="green"
+        />
       </div>
 
       {/* Action cards */}
       <div className="mt-10 grid gap-5 md:grid-cols-3">
         <AdminCard
+          href="/admin/verifications"
+          tag="Review"
+          title="Account verifications"
+          desc="Approve or reject newly registered farmers, buyers, and PDS operators."
+        />
+        <AdminCard
           href="/admin/fees"
           tag="Configure"
           title="Fee configuration"
-          desc="Edit commission, gateway fee, handling charges, and transport rates. Changes apply instantly to every quote."
+          desc="Edit commission, gateway fee, handling charges, and transport rates. Changes apply instantly."
         />
         <AdminCard
           href="/admin/orders"
@@ -59,26 +82,20 @@ export default async function AdminDashboard() {
           desc="Mark shipments and deliveries for the demo. Admin-controlled logistics gate."
         />
         <AdminCard
+          href="/admin/fpo"
+          tag="Review"
+          title="FPO applications"
+          desc="Verify member KrishiLink IDs and approve Farmer Producer Organisations."
+        />
+        <AdminCard
           href="/admin/transactions"
           tag="Monitor"
           title="All transactions"
           desc="Every deal across the platform with status and full breakdown."
         />
         <AdminCard
-          href="/admin/fpo"
-          tag="Review"
-          title="FPO applications"
-          desc="Verify member KrishiLink IDs and approve Farmer Producer Organisations."
-        />
-                <AdminCard
-          href="/admin/users"
-          tag="Manage"
-          title="Users"
-          desc="All registered farmers, buyers, PDS operators, and admins."
-        />
-        <AdminCard
           href="/admin/disputes"
-          tag="Review"
+          tag="Resolve"
           title="Disputes"
           desc="Transactions flagged for manual review by either party."
         />
@@ -95,6 +112,7 @@ export default async function AdminDashboard() {
           <li>✓ Database: connected</li>
           <li>✓ Net Realization Engine: live</li>
           <li>✓ Fee configuration: editable</li>
+          <li>✓ Wallet system: operational</li>
           <li>○ AI microservice: pending teammate delivery</li>
         </ul>
       </div>
@@ -104,13 +122,22 @@ export default async function AdminDashboard() {
 
 /* ---------- Small components ---------- */
 
-function Stat({ label, value }: { label: string; value: number | string }) {
+function Stat({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: number | string;
+  accent?: "green";
+}) {
+  const color = accent === "green" ? "text-[#2E7D32]" : "text-[#1B4D3E]";
   return (
-    <div className="rounded-[24px] border border-[#E4EBE6] bg-white p-5">
+    <div className="rounded-[20px] border border-[#E4EBE6] bg-white p-5">
       <p className="text-[11px] uppercase tracking-wide text-[#6B7A74]">
         {label}
       </p>
-      <p className="font-display mt-2 text-2xl font-extrabold text-[#1B4D3E]">
+      <p className={`font-display mt-2 text-2xl font-extrabold ${color}`}>
         {value}
       </p>
     </div>
