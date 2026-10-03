@@ -91,3 +91,10 @@ export interface FairnessOutput {
   suggestions: string[];
   source: AiSource;
 }
+
+/* ============================================================
+   Legacy aliases (for files written before the refactor)
+   ============================================================ */
+export type FairPriceResult = FairPriceOutput;
+export type QualityResult = QualityOutput;
+export type FairnessResult = FairnessOutput;
