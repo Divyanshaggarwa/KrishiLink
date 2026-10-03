@@ -7,6 +7,7 @@ import {
   useMotionValue,
   useTransform,
 } from "framer-motion";
+import JudgeDemoButton from "@/components/JudgeDemoButton";
 import { useEffect } from "react";
 
 /* ================= ICONS ================= */
@@ -339,6 +340,7 @@ export default function Home() {
             >
               📞 Try IVR
             </Link>
+            <JudgeDemoButton />
             <Link
               href="/login"
               className="rounded-full px-4 py-1.5 text-sm font-medium text-[#1B4D3E] transition-colors hover:bg-[#EAF5EE]"
@@ -421,18 +423,13 @@ export default function Home() {
               </a>
             </motion.div>
 
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.7, delay: 0.4 }}
-              className="mt-10 flex flex-wrap items-center gap-4 text-sm text-[#6B7A74]"
-            >
-              <span>14.6 Cr farmers</span>
+            <div className="mt-10 flex flex-wrap items-center gap-4 text-sm text-[#6B7A74]">
+              <span>🇮🇳 14.6 Cr farmers</span>
               <span className="h-1 w-1 rounded-full bg-[#A5D6A7]" />
               <span>₹4.82 L Cr mandi trade</span>
               <span className="h-1 w-1 rounded-full bg-[#A5D6A7]" />
               <span>6 layers → 0</span>
-            </motion.div>
+            </div>
           </div>
 
                     {/* Right: ecosystem-at-a-glance card */}
@@ -918,8 +915,8 @@ export default function Home() {
               />
               <div className="relative">
                 <h2 className="font-display mx-auto max-w-3xl text-3xl font-extrabold tracking-tight md:text-5xl">
-                  A farmer with a ₹1,000 phone deserves the same digital power as
-                  a bulk buyer.
+                  A farmer&apos;s income starts with what they{" "}
+                  <span className="text-[#A5D6A7]">actually</span> take home.
                 </h2>
                 <p className="mx-auto mt-4 max-w-xl text-white/80">
                   Explore the ecosystem, compare offers, and see the net
@@ -967,6 +964,12 @@ export default function Home() {
             <span className="rounded-full border border-[#E4EBE6] px-3 py-1">
               Buyers · demo data
             </span>
+            <Link
+              href="/ivr-sim"
+              className="rounded-full border border-[#E4EBE6] px-3 py-1 transition-colors hover:border-[#1B4D3E] hover:text-[#1B4D3E]"
+            >
+              IVR demo
+            </Link>
             <Link
               href="/admin"
               className="rounded-full border border-[#E4EBE6] px-3 py-1 transition-colors hover:border-[#1B4D3E] hover:text-[#1B4D3E]"
