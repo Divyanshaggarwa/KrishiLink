@@ -16,6 +16,7 @@ import {
   mockRoute,
   mockFairness,
 } from "./mock";
+import { callRoboflowQuality, isRoboflowSupported } from "./roboflow";
 
 const AI_URL = process.env.NEXT_PUBLIC_AI_URL || "";
 const TIMEOUT_MS = 6000;
@@ -38,7 +39,10 @@ async function callAI<T>(path: string, body: unknown): Promise<T | null> {
   }
 }
 
-export async function predictFairPrice(input: FairPriceInput): Promise<FairPriceOutput> {
+/* -------------------- Fair Price -------------------- */
+export async function predictFairPrice(
+  input: FairPriceInput
+): Promise<FairPriceOutput> {
   const ai = await callAI<FairPriceOutput>("/predict/price", {
     crop: input.crop,
     quality: input.quality,
@@ -49,12 +53,39 @@ export async function predictFairPrice(input: FairPriceInput): Promise<FairPrice
   return ai ?? mockFairPrice(input);
 }
 
-export async function predictQuality(imageBase64: string): Promise<QualityOutput> {
-  const ai = await callAI<QualityOutput>("/predict/quality", { image_base64: imageBase64 });
-  return ai ?? mockQuality({ imageBase64 });
+/* -------------------- Quality (Roboflow → AI → Mock) -------------------- */
+export async function predictQuality(
+  imageBase64: string,
+  crop?: string,
+  imageUrl?: string
+): Promise<QualityOutput> {
+  /* ---- 1. Try Roboflow (only for onion/potato) ---- */
+  if (crop && imageUrl && isRoboflowSupported(crop)) {
+    const roboflow = await callRoboflowQuality(imageUrl);
+    if (roboflow) {
+      return {
+        grade: roboflow.grade,
+        confidence: roboflow.confidence,
+        defects: [],
+        source: "ai",
+      };
+    }
+  }
+
+  /* ---- 2. Try external FastAPI service ---- */
+  const ai = await callAI<QualityOutput>("/predict/quality", {
+    image_base64: imageBase64,
+  });
+  if (ai) return ai;
+
+  /* ---- 3. Fallback to mock ---- */
+  return mockQuality({ imageBase64 });
 }
 
-export async function predictDemand(input: DemandInput): Promise<DemandOutput> {
+/* -------------------- Demand -------------------- */
+export async function predictDemand(
+  input: DemandInput
+): Promise<DemandOutput> {
   const ai = await callAI<DemandOutput>("/predict/demand", {
     crop: input.crop,
     district: input.district,
@@ -63,6 +94,7 @@ export async function predictDemand(input: DemandInput): Promise<DemandOutput> {
   return ai ?? mockDemand(input);
 }
 
+/* -------------------- Route -------------------- */
 export async function optimizeRoute(input: RouteInput): Promise<RouteOutput> {
   const ai = await callAI<RouteOutput>("/optimize/route", {
     farm_lat: input.farmLat,
@@ -74,7 +106,10 @@ export async function optimizeRoute(input: RouteInput): Promise<RouteOutput> {
   return ai ?? mockRoute(input);
 }
 
-export async function evaluateFairness(input: FairnessInput): Promise<FairnessOutput> {
+/* -------------------- Fairness -------------------- */
+export async function evaluateFairness(
+  input: FairnessInput
+): Promise<FairnessOutput> {
   const ai = await callAI<FairnessOutput>("/predict/fairness", {
     crop: input.crop,
     quality: input.quality,

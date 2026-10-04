@@ -68,12 +68,12 @@ export async function signupAction(
   }
 
   if (urlRole === "admin") {
-    const code = String(formData.get("admin_code") || "");
-    const expected = process.env.NEXT_PUBLIC_ADMIN_SIGNUP_CODE || "";
-    if (!expected || code !== expected) {
-      return { error: "Invalid admin signup code." };
-    }
+  const code = String(formData.get("admin_code") || "");
+  const expected = process.env.ADMIN_SIGNUP_CODE || "";
+  if (!expected || code !== expected) {
+    return { error: "Invalid admin signup code." };
   }
+}
 
   const normalizedPhone = normalizeIndianPhone(phoneRaw);
 
