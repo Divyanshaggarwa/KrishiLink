@@ -29,23 +29,40 @@ export default function OfferForm({ listing }: { listing: Listing }) {
 
   const [fairness, setFairness] = useState<FairnessResult | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [negotiatedOffer, setNegotiatedOffer] = useState<{
+    price: number;
+    quantity: number;
+    pickupMode: "pickup" | "delivery";
+  } | null>(null);
+  const currentPrice = Number(price);
+  const isPriceWithinFairRange =
+    fairness !== null &&
+    currentPrice >= fairness.fairLow &&
+    currentPrice <= fairness.fairHigh;
+  const isNegotiated =
+    negotiatedOffer?.price === currentPrice &&
+    negotiatedOffer?.quantity === Number(qty) &&
+    negotiatedOffer?.pickupMode === pickupMode &&
+    isPriceWithinFairRange;
 
   // Run Fairness AI whenever price + qty are valid
   useEffect(() => {
     const p = Number(price);
     const q = Number(qty);
-    if (!p || p <= 0 || !q || q <= 0 || !listing.quality_grade) {
+    if (!p || p <= 0 || !q || q <= 0) {
       setFairness(null);
+      setAnalyzing(false);
       return;
     }
 
     let cancelled = false;
     setAnalyzing(true);
+    setFairness(null);
 
     (async () => {
       const result = await evaluateFairness({
         crop: listing.crop,
-        quality: listing.quality_grade as "A" | "B" | "C",
+        quality: (listing.quality_grade ?? "A") as "A" | "B" | "C",
         quantityKg: q,
         district: listing.district,
         month: listing.month,
@@ -75,7 +92,10 @@ export default function OfferForm({ listing }: { listing: Listing }) {
             required
             step="0.01"
             value={price}
-            onChange={(e) => setPrice(e.target.value)}
+            onChange={(e) => {
+              setPrice(e.target.value);
+              setNegotiatedOffer(null);
+            }}
             placeholder="e.g. 24"
             className="mt-1.5 w-full rounded-xl border border-[#E4EBE6] px-4 py-3 text-sm outline-none focus:border-[#2E7D32] focus:ring-2 focus:ring-[#EAF5EE]"
           />
@@ -89,7 +109,10 @@ export default function OfferForm({ listing }: { listing: Listing }) {
             type="number"
             required
             value={qty}
-            onChange={(e) => setQty(e.target.value)}
+            onChange={(e) => {
+              setQty(e.target.value);
+              setNegotiatedOffer(null);
+            }}
             placeholder={`Max ${listing.quantity_kg}`}
             className="mt-1.5 w-full rounded-xl border border-[#E4EBE6] px-4 py-3 text-sm outline-none focus:border-[#2E7D32] focus:ring-2 focus:ring-[#EAF5EE]"
           />
@@ -103,7 +126,10 @@ export default function OfferForm({ listing }: { listing: Listing }) {
             <button
               key={m}
               type="button"
-              onClick={() => setPickupMode(m)}
+              onClick={() => {
+                setPickupMode(m);
+                setNegotiatedOffer(null);
+              }}
               className={`rounded-xl border px-4 py-3 text-sm font-medium capitalize transition-colors ${
                 pickupMode === m
                   ? "border-[#1B4D3E] bg-[#1B4D3E] text-white"
@@ -131,7 +157,7 @@ export default function OfferForm({ listing }: { listing: Listing }) {
         />
       </div>
 
-      {/* FAIR PRICE AI PANEL — only appears once bid values are entered */}
+      {/* Fair price first; the buyer confirms a negotiated final price before route costing. */}
       {(analyzing || fairness) && (
         <div className="rounded-2xl border border-[#C8E6C9] bg-[#EAF5EE] p-5">
           <div className="flex items-center justify-between">
@@ -143,16 +169,12 @@ export default function OfferForm({ listing }: { listing: Listing }) {
                 Indicative
               </span>
             )}
-          </div>
-          {/* NEW: Net Realization breakdown */}
-              {Number(price) > 0 && (
-              <RealizationCard
-                listingId={listing.id}
-                offerPrice={Number(price)}
-                quantityKg={Number(qty) || listing.quantity_kg}
-              />
+            {fairness?.source === "market-data" && (
+              <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-[#6B7A74]">
+                Historical market data
+              </span>
             )}
-
+          </div>
           {analyzing && !fairness ? (
             <div className="mt-3 flex items-center gap-2 text-sm text-[#6B7A74]">
               <ButtonSpinner size={14} />
@@ -168,7 +190,7 @@ export default function OfferForm({ listing }: { listing: Listing }) {
                 </span>
               </p>
               <p className="mt-1 text-xs text-[#6B7A74]">
-                Fair range for {listing.crop} · Grade {listing.quality_grade} ·{" "}
+                Fair range for {listing.crop} · Grade {listing.quality_grade ?? "A"} ·{" "}
                 {listing.district}
               </p>
 
@@ -204,9 +226,45 @@ export default function OfferForm({ listing }: { listing: Listing }) {
                   ))}
                 </ul>
               </details>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setNegotiatedOffer({
+                    price: currentPrice,
+                    quantity: Number(qty),
+                    pickupMode,
+                  })
+                }
+                disabled={analyzing || !isPriceWithinFairRange}
+                className="mt-4 w-full rounded-xl border border-[#1B4D3E] bg-white px-4 py-3 text-sm font-semibold text-[#1B4D3E] hover:bg-[#F3FAF5] disabled:opacity-50"
+              >
+                Confirm negotiated price ₹{currentPrice.toFixed(2)}/kg
+              </button>
+              {!isPriceWithinFairRange && (
+                <p role="alert" className="mt-2 text-xs font-medium text-[#B26A00]">
+                  The negotiated price must be within Fair Price AI&apos;s range
+                  of ₹{fairness.fairLow.toFixed(2)}–₹
+                  {fairness.fairHigh.toFixed(2)}/kg. Adjust your offer to
+                  continue.
+                </p>
+              )}
+              <p className="mt-2 text-[11px] text-[#6B7A74]">
+                Demo negotiation: adjust your offer above using the fair-price range, then confirm it to calculate delivery.
+              </p>
             </>
           ) : null}
         </div>
+      )}
+
+      {isNegotiated && (
+        <RealizationCard
+          key={`${negotiatedOffer.price}-${negotiatedOffer.quantity}-${negotiatedOffer.pickupMode}`}
+          listingId={listing.id}
+          offerPrice={negotiatedOffer.price}
+          quantityKg={negotiatedOffer.quantity}
+          pickupMode={negotiatedOffer.pickupMode}
+        />
       )}
 
       {state?.error && (
@@ -217,7 +275,7 @@ export default function OfferForm({ listing }: { listing: Listing }) {
 
             <button
         type="submit"
-        disabled={isPending}
+              disabled={isPending || !isNegotiated || !isPriceWithinFairRange}
         className="flex w-full items-center justify-center gap-2 rounded-full bg-[#1B4D3E] px-6 py-3.5 text-sm font-medium text-white transition-all hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-70"
       >
         {isPending ? (
@@ -226,7 +284,9 @@ export default function OfferForm({ listing }: { listing: Listing }) {
             Placing your offer…
           </>
         ) : (
-          "Place offer"
+          isNegotiated
+            ? "Place offer"
+            : "Complete demo negotiation above to place offer"
         )}
       </button>
     </form>

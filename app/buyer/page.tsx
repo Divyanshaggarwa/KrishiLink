@@ -6,6 +6,13 @@ import { requireRole } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import DashboardShell from "@/components/DashboardShell";
 import VerificationStatusCard from "@/components/VerificationStatusCard";
+import {
+  calculateNetRealization,
+  calculateTransportOptions,
+  estimateDistanceFromDistricts,
+  type QualityGrade,
+} from "@/lib/netRealization";
+import { loadFeeConfig, loadTransportRates } from "@/lib/nre/fetch-config";
 
 export default async function BuyerDashboard() {
   const profile = await requireRole(["buyer"]);
@@ -34,11 +41,11 @@ export default async function BuyerDashboard() {
     supabase
       .from("listings")
       .select(
-        "id, crop, quality_grade, quantity_kg, expected_price_per_kg, district, state, photo_url, created_at"
+        "id, farmer_id, crop, quality_grade, quantity_kg, expected_price_per_kg, district, state, photo_url, created_at"
       )
       .eq("status", "active")
       .order("created_at", { ascending: false })
-      .limit(4),
+      .limit(20),
     supabase
       .from("offers")
       .select(
@@ -52,7 +59,56 @@ export default async function BuyerDashboard() {
   const available = availableRes.count ?? 0;
   const myBids = myBidsRes.count ?? 0;
   const accepted = acceptedRes.count ?? 0;
-  const recentListings = recentListingsRes.data || [];
+  const recentListingRows = recentListingsRes.data || [];
+  const sellerIds = Array.from(
+    new Set(recentListingRows.map((listing) => listing.farmer_id))
+  );
+  const [sellerProfiles, feeConfig, transportRates] = await Promise.all([
+    sellerIds.length > 0
+      ? supabase
+          .from("public_profiles")
+          .select("id, district, state")
+          .in("id", sellerIds)
+      : Promise.resolve({ data: [] }),
+    loadFeeConfig(),
+    loadTransportRates(),
+  ]);
+  const sellerMap = new Map(
+    (sellerProfiles.data || []).map((seller) => [seller.id, seller])
+  );
+  const recentListings = recentListingRows
+    .map((listing) => {
+      const seller = sellerMap.get(listing.farmer_id);
+      const distanceKm = estimateDistanceFromDistricts(
+        seller?.district ?? listing.district,
+        seller?.state ?? listing.state,
+        profile.district ?? null,
+        profile.state ?? null
+      );
+      const grade = (listing.quality_grade ?? "A") as QualityGrade;
+      const farmerNet = calculateNetRealization(
+        {
+          pricePerKg: Number(listing.expected_price_per_kg),
+          quantityKg: Number(listing.quantity_kg),
+        },
+        grade,
+        feeConfig
+      );
+
+      return {
+        ...listing,
+        projectedFarmerNetPerKg: farmerNet.netRealizationPerKg,
+        transportOptions: calculateTransportOptions(
+          Number(listing.quantity_kg),
+          distanceKm,
+          transportRates
+        ),
+      };
+    })
+    .sort(
+      (a, b) => b.projectedFarmerNetPerKg - a.projectedFarmerNetPerKg
+    )
+    .slice(0, 4);
   const recentOffers = recentOffersRes.data || [];
 
   const location = [profile.district, profile.state]
@@ -259,7 +315,8 @@ export default async function BuyerDashboard() {
               Fresh on the marketplace
             </h2>
             <p className="mt-1 text-sm text-[#6B7A74]">
-              Latest verified listings from farmers
+              Top listings by projected farmer take-home. Compare delivery
+              costs by vehicle; transportation is not deducted from farmer net.
             </p>
           </div>
           <Link
@@ -276,7 +333,7 @@ export default async function BuyerDashboard() {
           </div>
         ) : (
           <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
-            {recentListings.map((l) => (
+            {recentListings.map((l, index) => (
               <Link
                 key={l.id}
                 href={`/buyer/browse/${l.id}`}
@@ -299,6 +356,11 @@ export default async function BuyerDashboard() {
                   <span className="absolute right-2 top-2 rounded-full bg-white/95 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#1B4D3E]">
                     Grade {l.quality_grade ?? "—"}
                   </span>
+                  {index === 0 && (
+                    <span className="absolute left-2 top-2 rounded-full bg-[#1B4D3E] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white">
+                      Best farmer net
+                    </span>
+                  )}
                 </div>
                 <div className="p-4">
                   <p className="font-display text-sm font-bold">{l.crop}</p>
@@ -308,6 +370,24 @@ export default async function BuyerDashboard() {
                   <p className="mt-2 text-sm font-semibold text-[#1B4D3E]">
                     ₹{l.expected_price_per_kg}/kg
                   </p>
+                  <p className="mt-1 text-[11px] font-medium text-[#2E7D32]">
+                    Farmer net estimate: ₹
+                    {l.projectedFarmerNetPerKg.toFixed(2)}/kg
+                  </p>
+                  <div className="mt-2 border-t border-[#E4EBE6] pt-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-[#6B7A74]">
+                      Delivery estimate (buyer pays)
+                    </p>
+                    {l.transportOptions.map((option) => (
+                      <p
+                        key={option.vehicle}
+                        className="mt-1 flex justify-between gap-2 text-[10px] text-[#6B7A74]"
+                      >
+                        <span>{option.vehicle}</span>
+                        <span>₹{option.totalCost.toLocaleString("en-IN")}</span>
+                      </p>
+                    ))}
+                  </div>
                 </div>
               </Link>
             ))}

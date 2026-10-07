@@ -12,6 +12,7 @@ export default function AcceptModal({
   listingTotalQty,
   netKrishilink,
   netSelf,
+  transportCost,
   pickupMode,
   distanceKm,
 }: {
@@ -22,6 +23,7 @@ export default function AcceptModal({
   listingTotalQty: number;
   netKrishilink: number;
   netSelf: number;
+  transportCost: number;
   pickupMode: string;
   distanceKm: number;
 }) {
@@ -88,8 +90,9 @@ export default function AcceptModal({
                     <div>
                       <p className="text-sm font-semibold">KrishiLink arranges</p>
                       <p className="text-[11px] text-[#6B7A74]">
-                        Transport cost ₹{(pricePerKg - netKrishilink).toFixed(2)}
-                        /kg deducted
+                        Buyer pays estimated transport of ₹
+                        {transportCost.toLocaleString("en-IN")}; it is not
+                        deducted from your take-home.
                       </p>
                     </div>
                   </label>
@@ -110,7 +113,9 @@ export default function AcceptModal({
                     <div>
                       <p className="text-sm font-semibold">I&apos;ll deliver myself</p>
                       <p className="text-[11px] text-[#6B7A74]">
-                        No transport cost deducted
+                        Buyer pays estimated transport of ₹
+                        {transportCost.toLocaleString("en-IN")}; it is not
+                        deducted from your take-home.
                       </p>
                     </div>
                   </label>

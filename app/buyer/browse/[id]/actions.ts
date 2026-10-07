@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentProfile } from "@/lib/auth";
+import { evaluateFairness } from "@/lib/ai";
 import { redirect } from "next/navigation";
 
 export type OfferState = { error?: string; ok?: boolean } | null;
@@ -27,12 +28,17 @@ export async function placeOfferAction(
   if (!quantityKg || quantityKg <= 0) {
     return { error: "Please enter a valid quantity." };
   }
+  if (pickupMode !== "pickup" && pickupMode !== "delivery") {
+    return { error: "Please choose a valid pickup mode." };
+  }
 
   const supabase = await createClient();
 
   const { data: listing } = await supabase
     .from("listings")
-    .select("quantity_kg, status")
+    .select(
+      "crop, quality_grade, quantity_kg, expected_price_per_kg, district, harvest_date, created_at, status"
+    )
     .eq("id", listingId)
     .single();
 
@@ -43,6 +49,38 @@ export async function placeOfferAction(
   if (quantityKg > listing.quantity_kg) {
     return {
       error: `Only ${listing.quantity_kg} kg available on this listing.`,
+    };
+  }
+
+  const harvestMonth = new Date(
+    listing.harvest_date || listing.created_at
+  ).getMonth() + 1;
+  const quality =
+    listing.quality_grade === "B" || listing.quality_grade === "C"
+      ? listing.quality_grade
+      : "A";
+  const fairness = await evaluateFairness({
+    crop: listing.crop,
+    quality,
+    quantityKg,
+    district: listing.district,
+    month: harvestMonth,
+    farmerExpectedPrice: Number(listing.expected_price_per_kg),
+    buyerBid: pricePerKg,
+  });
+  if (
+    !Number.isFinite(fairness.fairLow) ||
+    !Number.isFinite(fairness.fairHigh) ||
+    fairness.fairLow > fairness.fairHigh
+  ) {
+    return { error: "Fair Price AI could not provide a valid price range. Please try again." };
+  }
+  if (
+    pricePerKg < fairness.fairLow ||
+    pricePerKg > fairness.fairHigh
+  ) {
+    return {
+      error: `Your offer must be within Fair Price AI's range of ₹${fairness.fairLow.toFixed(2)}–₹${fairness.fairHigh.toFixed(2)}/kg.`,
     };
   }
 

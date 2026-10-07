@@ -23,6 +23,14 @@ export default function FeeForm({
     updateFeeConfigAction,
     null
   );
+  const feeKeys = new Set(fees.map((fee) => fee.key));
+  const visibleFees = fees.filter(
+    (fee) =>
+      !(
+        (fee.key === "commission_pct" && feeKeys.has("farmer_fee_pct")) ||
+        (fee.key === "handling_flat" && feeKeys.has("handling_per_kg"))
+      )
+  );
 
   return (
     <form action={formAction} className="space-y-8">
@@ -31,11 +39,12 @@ export default function FeeForm({
           Platform fees
         </h2>
         <p className="mt-1 text-xs text-[#6B7A74]">
-          These values apply instantly to every new Net Realization quote.
+          Quotes use these rates; platform fees are collected only when an
+          order completes.
         </p>
 
         <div className="mt-5 grid gap-4 md:grid-cols-2">
-          {fees.map((f) => (
+          {visibleFees.map((f) => (
             <div key={f.key}>
               <label className="text-xs font-medium text-[#0F1F1A]">
                 {f.key}

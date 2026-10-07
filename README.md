@@ -9,7 +9,7 @@
 **KrishiLink** is a direct agricultural marketplace connecting Indian farmers, Farmer Producer Organisations (FPOs), institutional buyers, and village kiosks. By eliminating unnecessary layers of commission agents (*arthiyas* and middlemen), KrishiLink addresses the structural 30–40% value loss suffered by farmers.
 
 The platform is anchored by proprietary innovations:
-1. **Net Realization Engine (NRE)**: Calculates the farmer's *actual take-home* earnings (gross offer price minus logistics, platform fees, handling, and quality adjustments) and shows real-time comparison badges against the nearest mandi benchmark.
+1. **Net Realization Engine (NRE)**: Calculates the farmer's *actual take-home* earnings (gross offer price minus platform fees, handling, and quality adjustments; transport is paid separately by the buyer) and shows real-time comparison badges against the nearest mandi benchmark.
 2. **Shared Fair Band**: A transparent, dual-sided pricing corridor computed from farmer ask, buyer bid, and APMC modal prices, adjusted for quality grade and shared logistics.
 3. **Multi-Role IVR Voice Gateway**: Accessible in **Hindi, English, and Kannada** for feature-phone and low-literacy users, supporting Farmers, Buyers, and FPOs through KrishiLink ID (`KL-XXXXXX`) and OTP verification.
 4. **FPO Collective Pooling**: Enables FPO heads to aggregate member harvests into bulk commercial lots, accept bulk bids, and automatically distribute escrow payouts to individual member wallets.
@@ -36,17 +36,21 @@ The platform is anchored by proprietary innovations:
 ```
 
 ### 2.1 Net Realization Engine (NRE)
-Traditional marketplaces quote gross prices, hiding transport and commission deductions until settlement. NRE calculates net take-home before offer acceptance:
-$$\text{Net Realization} = \text{Offer Price} - \text{Commission} - \text{Gateway Fee} - \text{Handling} - \text{Logistics} - \text{Quality Deduction}$$
+Traditional marketplaces quote gross prices, hiding commission deductions until settlement. NRE calculates farmer take-home before offer acceptance:
+$$\text{Farmer Net Realization} = \text{Offer Price} - \text{Farmer Fee} - \text{Gateway Fee} - \text{Handling} - \text{Quality Deduction}$$
+Transport is not deducted from farmer proceeds; buyers compare transport costs separately.
 Farmers compare offers against the Mandi Benchmark:
 $$\text{Mandi Net} = \text{Modal Price} - \text{APMC Commission (6\%)} - \text{Transport to Mandi} - \text{Spoilage (3\%)}$$
 
 ### 2.2 Shared Fair Band
-Both buyer and farmer view the identical fair price corridor `[Mid - 1.5, Mid + 1.5]`:
-- **Anchor**: Average of Farmer ask, Buyer bid, and Mandi price.
-- **Quality Factor**: Multiplier applied per grade (Grade A: $1.0\times$, Grade B: $0.92\times$, Grade C: $0.82\times$).
-- **Shared Costs**: 50/50 split of transport, labour, and transaction fees.
-- **Verdict**: Automatically classifies price spread into *Narrow*, *Moderate*, or *Wide*.
+For onion, potato, and tomato, historical observations in
+`lib/fairPrice/data.json` are used for negotiation only when the listing is in
+Agra and the latest observation is within seven days. Stale or out-of-region
+sample prices are not used to block offers. Otherwise, the configured Fairness
+AI is checked against a stable local reference, with implausible ranges falling
+back to an indicative calculation. Buyer negotiation and server-side offer
+validation use the same range, which does not move when the buyer changes their
+bid. Grade B/C market references may be estimated from Grade A and are flagged.
 
 ### 2.3 FPO Collective Pooling & Member Revenue Splitting
 Smallholders (<2 acres) cannot fulfill bulk buyer orders independently. KrishiLink enables:
@@ -55,14 +59,18 @@ Smallholders (<2 acres) cannot fulfill bulk buyer orders independently. KrishiLi
 - Automated proportional revenue distribution to member wallets (`fpo_pool_payouts`) upon delivery confirmation.
 
 ### 2.4 Digital Wallet & 30/70 Escrow State Machine
-- **30% Advance**: Buyer wallet debited 30% gross; seller/FPO wallet credited 30% net; admin credited 30% commission; order status transitions to `escrow_paid`.
-- **70% Final Settlement**: Buyer verifies delivery; remaining 70% released; member shares credited; trust scores incremented (+2).
+- **30% Advance**: Buyer wallet is debited 30% of crop value; the corresponding 30% of farmer net is held as locked escrow in the seller/FPO wallet until final payment.
+- **Final Settlement**: After delivery confirmation, the buyer pays the remaining crop value plus configured fees and transport; the locked funds are released, platform/transporter fees are credited, member shares are distributed, and trust scores increment (+2).
 
 ### 2.5 Computer Vision Quality AI (Roboflow Serverless)
 - Farmers upload produce photos during listing.
 - Server-side proxy (`app/api/ai/quality`) sends image to Roboflow workflow.
-- Classifies onion and potato lots into Grade A, B, or C with confidence scores.
-- Deterministic mock engine handles other crops and offline conditions.
+- Roboflow classes must include both crop and grade, for example `Onion_A`.
+- The listing form compares the detected crop with the entered crop; a mismatch
+  clears and disables grade selection, and the listing cannot be published.
+- A grade-only response is insufficient for verification. When the AI cannot
+  identify the crop, it does not auto-select a grade; the farmer can enter a
+  grade manually if the image is not reported as a mismatch.
 
 ### 2.6 Route AI & Logistics Optimization
 - OSRM live routing (`router.project-osrm.org`) with 30-minute in-memory caching.
@@ -70,7 +78,35 @@ Smallholders (<2 acres) cannot fulfill bulk buyer orders independently. KrishiLi
 - Multi-order corridor consolidation within 50km radius, calculating shared logistics savings in ₹/kg.
 - Interactive Leaflet maps (`OrderMapView.tsx`, `RouteOptimizer.tsx`) with ESRI satellite and street tiles.
 
-### 2.7 Interactive Voice Response (IVR) Gateway
+### 2.7 Net realization and settlement
+- Farmer net realization deducts configured farmer fees, gateway fees, handling,
+  and grade deductions; it never deducts transport.
+- Buyers compare projected farmer take-home and see buyer-paid transport
+  estimates for eligible vehicles.
+- Buyer escrow is 30% of crop value. The corresponding 30% farmer proceeds stay
+  locked until the buyer's final payment completes the order.
+- Buyer, farmer, and KrishiLink transporter fees are credited only on order
+  completion. KrishiLink-arranged transport uses the platform admin profile as
+  its transport account; self-delivery transport reimbursement goes to the
+  farmer.
+- Buyer offers run Fair Price AI first, then confirm the buyer-adjusted demo
+  negotiated price, and only then estimate delivery with Route AI. If Route AI
+  is unavailable or returns an invalid result, the estimate uses the mock route
+  calculation. Delivery cost is included in the buyer estimate, not deducted
+  from farmer net realization.
+- Fair Price AI uses the historical Agra market sample in `lib/fairPrice/data.json`
+  for onion, potato, and tomato when available. The resulting grade-specific
+  range is used both in buyer negotiation and server-side offer validation.
+  Farmer listing forms show the same reference; buyer browsing gets an
+  advisory recommendation based on configured delivery estimates and quality.
+  This seed dataset is not a live market feed; check the displayed observation
+  date and confidence. Update the JSON observations to refresh the reference.
+- `GET /api/fair-price?crop=onion` returns available grade ranges;
+  `POST /api/recommend` accepts buyer-visible listing and delivery estimates.
+- Run [`supabase/finance-workflow.sql`](./supabase/finance-workflow.sql) once in
+  the Supabase SQL Editor before deploying these changes.
+
+### 2.8 Interactive Voice Response (IVR) Gateway
 Accessible at `/ivr-sim` (mirrors Exotel/Twilio production webhooks):
 - 26-state machine supporting English, Hindi, and Kannada.
 - **Farmer flow**: List produce, hear top offers ranked by Net Realization, accept/reject deals.
@@ -237,6 +273,11 @@ ROBOFLOW_API_KEY=<your-roboflow-key>
 # Optional External AI Microservice (Falls back to local modules if unset)
 NEXT_PUBLIC_AI_URL=
 ```
+
+To switch the quality checker to a retrained Roboflow workflow, update
+`ROBOFLOW_SERVERLESS_URL` to the new workflow endpoint and keep the existing
+`ROBOFLOW_API_KEY` if its permissions cover that workflow. Restart locally or
+redeploy so the server picks up the new environment value.
 
 ---
 

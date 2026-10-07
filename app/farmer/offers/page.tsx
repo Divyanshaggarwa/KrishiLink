@@ -10,9 +10,14 @@ import AcceptModal from "./AcceptModal";
 import BookCallButton from "./BookCallButton";
 import FairBandCard from "@/components/nre/FairBandCard";
 import { computeFairBand } from "@/lib/nre/fairBand";
-import { loadMandiPrice } from "@/lib/nre/fetch-config";
+import {
+  loadFeeConfig,
+  loadMandiPrice,
+  loadTransportRates,
+} from "@/lib/nre/fetch-config";
 import {
   calculateNetRealization,
+  calculateTransportOptions,
   estimateDistanceFromDistricts,
   type QualityGrade,
 } from "@/lib/netRealization";
@@ -88,6 +93,10 @@ export default async function OffersReceivedPage() {
     const m = await loadMandiPrice(crop);
     if (m) mandiPrices[crop] = m.modal_price;
   }
+  const [feeConfig, transportRates] = await Promise.all([
+    loadFeeConfig(),
+    loadTransportRates(),
+  ]);
 
   // 5. Build enriched rows
   const rows = offers.map((o) => {
@@ -108,8 +117,14 @@ export default async function OffersReceivedPage() {
         quantityKg: o.quantity_kg,
         distanceKm: distance,
       },
-      grade
+      grade,
+      feeConfig
     );
+    const cheapestTransport = calculateTransportOptions(
+      Number(o.quantity_kg),
+      distance,
+      transportRates
+    )[0];
 
     const fairBand = computeFairBand({
       farmerExpectedPrice: Number(l.expected_price_per_kg),
@@ -139,16 +154,20 @@ export default async function OffersReceivedPage() {
       message: o.message,
       status: o.status,
       distanceKm: breakdown.distanceKm,
-      transportCostPerKg: breakdown.transportCostPerKg,
-      transactionCostPerKg: breakdown.transactionCostPerKg,
+      farmerFeePerKg: breakdown.farmerFeePerKg,
+      otherFeePerKg: breakdown.gatewayFeePerKg + breakdown.handlingPerKg,
       qualityDeduction: breakdown.qualityDeduction,
       netPerKg: breakdown.netRealizationPerKg,
       netTotal: breakdown.netAmount,
+      transportCostTotal:
+        o.pickup_mode === "delivery"
+          ? cheapestTransport?.totalCost ?? 0
+          : 0,
       fairBand,
     };
   });
 
-  // 6. Group by listing, sort each group by net/kg desc
+  // 6. Group by listing, sort each group by farmer take-home per kg
   const grouped = new Map<string, typeof rows>();
   rows.forEach((r) => {
     if (!grouped.has(r.listingId)) grouped.set(r.listingId, []);
@@ -161,7 +180,7 @@ export default async function OffersReceivedPage() {
       profile={profile}
       showBack={true}
       title="Offers received"
-      subtitle="Every buyer offer ranked by NET REALIZATION — what actually reaches your hand after logistics and transaction costs."
+      subtitle="Offers are ranked by your projected take-home. Transportation is not deducted from the farmer's net."
     >
       <div className="space-y-10">
         {Array.from(grouped.entries()).map(([listingId, list]) => {
@@ -213,8 +232,8 @@ export default async function OffersReceivedPage() {
                       <th className="px-6 py-3 font-medium">Buyer</th>
                       <th className="px-4 py-3 font-medium">₹/kg</th>
                       <th className="px-4 py-3 font-medium">Qty</th>
-                      <th className="px-4 py-3 font-medium">− Transport</th>
-                      <th className="px-4 py-3 font-medium">− Txn</th>
+                      <th className="px-4 py-3 font-medium">− Farmer fee</th>
+                      <th className="px-4 py-3 font-medium">− Gateway/handling</th>
                       <th className="px-4 py-3 font-medium">− Quality</th>
                       <th className="px-4 py-3 font-medium text-[#1B4D3E]">
                         Net ₹/kg
@@ -263,10 +282,10 @@ export default async function OffersReceivedPage() {
                             </td>
                             <td className="px-4 py-4">{r.offerQty} kg</td>
                             <td className="px-4 py-4 text-[#C62828]">
-                              −₹{r.transportCostPerKg.toFixed(2)}
+                              −₹{r.farmerFeePerKg.toFixed(2)}
                             </td>
                             <td className="px-4 py-4 text-[#C62828]">
-                              −₹{r.transactionCostPerKg.toFixed(2)}
+                              −₹{r.otherFeePerKg.toFixed(2)}
                             </td>
                             <td className="px-4 py-4 text-[#C62828]">
                               −₹{r.qualityDeduction.toFixed(2)}
@@ -297,13 +316,8 @@ export default async function OffersReceivedPage() {
                                     offerQty={r.offerQty}
                                     listingTotalQty={r.quantityKg}
                                     netKrishilink={r.netPerKg}
-                                    netSelf={Number(
-                                      (
-                                        r.pricePerKg -
-                                        r.transactionCostPerKg -
-                                        r.qualityDeduction
-                                      ).toFixed(2)
-                                    )}
+                                    netSelf={r.netPerKg}
+                                    transportCost={r.transportCostTotal}
                                     pickupMode={r.pickupMode}
                                     distanceKm={r.distanceKm}
                                   />

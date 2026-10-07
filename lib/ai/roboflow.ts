@@ -6,7 +6,7 @@
 export const ROBOFLOW_SUPPORTED_CROPS = ["onion", "potato"] as const;
 
 export interface RoboflowQualityResult {
-  grade: "A" | "B" | "C";
+  grade: "A" | "B" | "C" | null;
   confidence: number;
   detectedCrop: string | null;
   raw: unknown;
@@ -56,7 +56,7 @@ export async function callRoboflowQuality(
  * Parses Roboflow Workflow responses. Extracts grade + crop name.
  *
  * Class label formats we support:
- *   "A"            → grade A, no crop info
+ *   "A"            → grade A, no crop info (not sufficient to verify a listing)
  *   "onion_A"      → crop onion, grade A
  *   "onion_A_rot"  → crop onion, grade A
  *   "GRADE_A"      → grade A
@@ -93,7 +93,7 @@ function parseRoboflowResponse(data: unknown): RoboflowQualityResult | null {
             const parsed = parseClassLabel(cls);
             if (parsed.grade || parsed.crop) {
               return {
-                grade: parsed.grade ?? "B",
+                grade: parsed.grade,
                 confidence: conf,
                 detectedCrop: parsed.crop,
                 raw: data,
@@ -107,7 +107,7 @@ function parseRoboflowResponse(data: unknown): RoboflowQualityResult | null {
             const parsed = parseClassLabel(containerClass);
             if (parsed.grade || parsed.crop) {
               return {
-                grade: parsed.grade ?? "B",
+                grade: parsed.grade,
                 confidence: Number(predsContainer.confidence ?? 0.7),
                 detectedCrop: parsed.crop,
                 raw: data,
@@ -124,7 +124,7 @@ function parseRoboflowResponse(data: unknown): RoboflowQualityResult | null {
           const parsed = parseClassLabel(cls);
           if (parsed.grade || parsed.crop) {
             return {
-              grade: parsed.grade ?? "B",
+              grade: parsed.grade,
               confidence: conf,
               detectedCrop: parsed.crop,
               raw: data,
@@ -141,7 +141,7 @@ function parseRoboflowResponse(data: unknown): RoboflowQualityResult | null {
       const parsed = parseClassLabel(String(top.class ?? top.class_name ?? ""));
       if (parsed.grade || parsed.crop) {
         return {
-          grade: parsed.grade ?? "B",
+          grade: parsed.grade,
           confidence: Number(top.confidence ?? 0.7),
           detectedCrop: parsed.crop,
           raw: data,
@@ -153,7 +153,7 @@ function parseRoboflowResponse(data: unknown): RoboflowQualityResult | null {
       const parsed = parseClassLabel(String(d.class));
       if (parsed.grade || parsed.crop) {
         return {
-          grade: parsed.grade ?? "B",
+          grade: parsed.grade,
           confidence: Number(d.confidence ?? 0.7),
           detectedCrop: parsed.crop,
           raw: data,
@@ -177,42 +177,34 @@ interface ParsedLabel {
 }
 
 function parseClassLabel(cls: string): ParsedLabel {
-  const cleaned = cls.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
-  const lower = cls.toLowerCase();
+  const tokens = cls.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const compact = tokens.join("");
+  const compactGrade = compact.match(/^(?:grade|quality|class)?([abc])$/);
+  const gradeIndex = tokens.findIndex((token) =>
+    ["a", "b", "c"].includes(token)
+  );
+  const grade =
+    (compactGrade?.[1] as "a" | "b" | "c" | undefined) ??
+    (gradeIndex >= 0 ? tokens[gradeIndex] as "a" | "b" | "c" : null);
 
-  // Extract grade
-  let grade: "A" | "B" | "C" | null = null;
-  if (
-    cleaned === "A" ||
-    cleaned === "GRADEA" ||
-    cleaned.startsWith("A_") ||
-    cleaned.endsWith("_A")
-  ) {
-    grade = "A";
-  } else if (
-    cleaned === "B" ||
-    cleaned === "GRADEB" ||
-    cleaned.startsWith("B_") ||
-    cleaned.endsWith("_B")
-  ) {
-    grade = "B";
-  } else if (
-    cleaned === "C" ||
-    cleaned === "GRADEC" ||
-    cleaned.startsWith("C_") ||
-    cleaned.endsWith("_C")
-  ) {
-    grade = "C";
-  }
+  const beforeGrade =
+    gradeIndex >= 0 ? tokens.slice(0, gradeIndex) : [];
+  const afterGrade =
+    gradeIndex >= 0 ? tokens.slice(gradeIndex + 1) : [];
+  const cropTokens =
+    beforeGrade.some((token) => !["grade", "quality", "class"].includes(token))
+      ? beforeGrade
+      : compactGrade
+        ? []
+        : afterGrade.length > 0
+          ? afterGrade
+          : tokens;
+  const crop = cropTokens
+    .filter((token) => !["grade", "quality", "class"].includes(token))
+    .join(" ") || null;
 
-  // Extract crop
-  let crop: string | null = null;
-  for (const c of ROBOFLOW_SUPPORTED_CROPS) {
-    if (lower.includes(c)) {
-      crop = c;
-      break;
-    }
-  }
-
-  return { grade, crop };
+  return {
+    grade: grade ? (grade.toUpperCase() as "A" | "B" | "C") : null,
+    crop,
+  };
 }

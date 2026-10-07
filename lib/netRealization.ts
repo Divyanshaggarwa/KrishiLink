@@ -72,10 +72,45 @@ export function pickVehicle(
   quantityKg: number,
   rates: TransportRate[] = DEFAULT_TRANSPORT_RATES
 ): TransportRate {
+  if (rates.length === 0) return DEFAULT_TRANSPORT_RATES[0];
   const match = rates.find(
     (r) => quantityKg >= r.min_weight_kg && quantityKg <= r.max_weight_kg
   );
   return match ?? rates[rates.length - 1];
+}
+
+export interface TransportCostOption {
+  vehicle: string;
+  ratePerKm: number;
+  distanceKm: number;
+  totalCost: number;
+  costPerKg: number;
+}
+
+export function calculateTransportOptions(
+  quantityKg: number,
+  distanceKm: number,
+  rates: TransportRate[] = DEFAULT_TRANSPORT_RATES
+): TransportCostOption[] {
+  const availableRates = rates.length > 0 ? rates : DEFAULT_TRANSPORT_RATES;
+  const fittingRates = availableRates.filter(
+    (rate) =>
+      quantityKg >= rate.min_weight_kg && quantityKg <= rate.max_weight_kg
+  );
+  const options = fittingRates.length > 0 ? fittingRates : [pickVehicle(quantityKg, availableRates)];
+
+  return options
+    .map((rate) => {
+      const totalCost = Math.max(0, distanceKm) * rate.rate_per_km;
+      return {
+        vehicle: rate.vehicle,
+        ratePerKm: rate.rate_per_km,
+        distanceKm: round2(Math.max(0, distanceKm)),
+        totalCost: round2(totalCost),
+        costPerKg: round2(quantityKg > 0 ? totalCost / quantityKg : 0),
+      };
+    })
+    .sort((a, b) => a.totalCost - b.totalCost);
 }
 
 /* ================================================================

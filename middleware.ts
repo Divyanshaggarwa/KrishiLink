@@ -6,6 +6,8 @@ const PUBLIC_PATHS = new Set([
   "/login",
   "/signup",
   "/ivr-sim",
+  "/api/fair-price",
+  "/api/recommend",
 ]);
 
 const ROLE_HOME: Record<string, string> = {

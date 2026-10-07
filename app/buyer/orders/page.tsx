@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import DashboardShell from "@/components/DashboardShell";
 import Timeline from "@/components/orders/Timeline";
 import { PayEscrowButton, ConfirmDeliveryButton } from "./OrderButtons";
+import { loadFeeConfig } from "@/lib/nre/fetch-config";
 
 export default async function BuyerOrdersPage() {
   const profile = await requireRole(["buyer"]);
@@ -24,12 +25,13 @@ export default async function BuyerOrdersPage() {
   const { data: orders } = await supabase
     .from("transactions")
     .select(
-      "id, listing_id, pool_id, offer_id, farmer_id, final_price_per_kg, quantity_kg, gross_amount, escrow_amount_paid, logistics_cost_per_kg, distance_km, vehicle_type, status, created_at"
+      "id, listing_id, pool_id, offer_id, farmer_id, final_price_per_kg, quantity_kg, gross_amount, buyer_total_payable, escrow_amount_paid, logistics_cost_per_kg, distance_km, vehicle_type, status, created_at"
     )
     .eq("buyer_id", profile.id)
     .order("created_at", { ascending: false });
 
   const safeOrders = orders || [];
+  const fees = await loadFeeConfig();
 
   // 3. Listings lookup
   const listingIds = Array.from(
@@ -207,15 +209,21 @@ export default async function BuyerOrdersPage() {
                 </div>
 
                 {/* Details */}
-                <div className="mt-5 grid gap-4 md:grid-cols-3">
+                <div className="mt-5 grid gap-4 md:grid-cols-4">
                   <Field
                     label="Deal price"
                     value={`₹${Number(o.final_price_per_kg).toFixed(2)}/kg`}
                   />
                   <Field label="Quantity" value={`${o.quantity_kg} kg`} />
                   <Field
-                    label="Total payable"
+                    label="Crop value"
                     value={`₹${Number(o.gross_amount).toLocaleString("en-IN")}`}
+                  />
+                  <Field
+                    label="Total incl. fees/delivery"
+                    value={`₹${getBuyerTotalPayable(o, fees).toLocaleString(
+                      "en-IN"
+                    )}`}
                     accent
                   />
                 </div>
@@ -244,9 +252,7 @@ export default async function BuyerOrdersPage() {
                   <div className="mt-5 flex justify-end border-t border-[#E4EBE6] pt-5">
                     <PayEscrowButton
                       orderId={o.id}
-                      amount={Number(
-                        (Number(o.gross_amount) * 0.3).toFixed(2)
-                      )}
+                      amount={Number((Number(o.gross_amount) * 0.3).toFixed(2))}
                       buyerBalance={buyerBalance}
                     />
                   </div>
@@ -257,12 +263,7 @@ export default async function BuyerOrdersPage() {
                   <div className="mt-5 flex justify-end border-t border-[#E4EBE6] pt-5">
                     <ConfirmDeliveryButton
                       orderId={o.id}
-                      finalAmount={Number(
-                        (
-                          Number(o.gross_amount) -
-                          Number(o.gross_amount) * 0.3
-                        ).toFixed(2)
-                      )}
+                      finalAmount={getFinalPaymentDue(o, fees)}
                       buyerBalance={buyerBalance}
                     />
                   </div>
@@ -284,6 +285,41 @@ export default async function BuyerOrdersPage() {
 }
 
 /* ------------------------------------------------------------------ */
+
+function getFinalPaymentDue(
+  order: {
+    gross_amount: number;
+    quantity_kg: number;
+    logistics_cost_per_kg: number | null;
+    escrow_amount_paid: number | null;
+    buyer_total_payable?: number | null;
+  },
+  fees: Awaited<ReturnType<typeof loadFeeConfig>>
+): number {
+  const gross = Number(order.gross_amount);
+  const buyerTotal = getBuyerTotalPayable(order, fees);
+  const escrowPaid = Number(order.escrow_amount_paid ?? gross * 0.3);
+  return Number(Math.max(0, buyerTotal - escrowPaid).toFixed(2));
+}
+
+function getBuyerTotalPayable(
+  order: {
+    gross_amount: number;
+    quantity_kg: number;
+    logistics_cost_per_kg: number | null;
+    buyer_total_payable?: number | null;
+  },
+  fees: Awaited<ReturnType<typeof loadFeeConfig>>
+): number {
+  const gross = Number(order.gross_amount);
+  const transportCost =
+    Number(order.logistics_cost_per_kg ?? 0) * Number(order.quantity_kg);
+  return (
+    Number(order.buyer_total_payable) ||
+    gross * (1 + (fees.buyer_fee_pct + fees.gateway_pct) / 100) +
+      transportCost
+  );
+}
 
 function Stat({
   label,

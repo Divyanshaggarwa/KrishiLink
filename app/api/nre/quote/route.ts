@@ -7,10 +7,12 @@ import {
 } from "@/lib/nre/fetch-config";
 import {
   computeRealization,
+  computeBuyerLandedCost,
   computeMandiBenchmark,
   estimateDistanceFromDistricts,
   type QualityGrade,
 } from "@/lib/nre/helpers";
+import { getDistrictCoords, jitterCoords } from "@/lib/route-ai/districts";
 
 export async function GET(req: NextRequest) {
   const profile = await getCurrentProfile();
@@ -75,12 +77,29 @@ export async function GET(req: NextRequest) {
   ]);
 
   const grade = (listing.quality_grade ?? "A") as QualityGrade;
+  const routeCoordinates = {
+    farm: jitterCoords(
+      getDistrictCoords(listing.district, listing.state, null),
+      listing.farmer_id
+    ),
+    buyer: jitterCoords(
+      getDistrictCoords(profile.district ?? null, profile.state ?? null, null),
+      profile.id
+    ),
+  };
 
   const realization = computeRealization({
     offerPricePerKg: offerPrice,
     quantityKg: listing.quantity_kg,
     grade,
     feeConfig,
+  });
+  const buyerLandedCost = computeBuyerLandedCost({
+    offerPricePerKg: offerPrice,
+    quantityKg: listing.quantity_kg,
+    distanceKm,
+    feeConfig,
+    transportRates,
   });
 
   // Mandi benchmark (assume 60 km to mandi for demo, 6% APMC commission, 3% spoilage)
@@ -107,6 +126,8 @@ export async function GET(req: NextRequest) {
     grade,
     offerPrice,
     realization,
+    buyerLandedCost,
+    routeCoordinates,
     mandiBenchmark,
     mandiMarket: mandi?.market ?? null,
     mandiModalPrice: mandi?.modal_price ?? null,

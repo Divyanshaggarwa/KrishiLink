@@ -9,6 +9,10 @@ export type ListingState = { error?: string; ok?: boolean } | null;
 const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
+function normalizeCrop(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
 export async function createListingAction(
   _prev: ListingState,
   formData: FormData
@@ -54,7 +58,11 @@ export async function createListingAction(
   if (!state) return { error: "State is required." };
 
   // Server-side block on AI crop mismatch
-  if (cropMismatch) {
+  if (
+    cropMismatch ||
+    (aiDetectedCrop &&
+      normalizeCrop(aiDetectedCrop) !== normalizeCrop(crop))
+  ) {
     return {
       error: `The AI detected a different crop (${aiDetectedCrop ?? "unknown"}) in the photo. Please fix the crop name or upload the correct photo.`,
     };

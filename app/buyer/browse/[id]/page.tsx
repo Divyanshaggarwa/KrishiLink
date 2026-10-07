@@ -98,8 +98,8 @@ export default async function ListingDetail({
           <div className="rounded-[24px] border border-[#E4EBE6] bg-white p-6 lg:sticky lg:top-24">
             <h2 className="font-display text-lg font-bold">Place an offer</h2>
             <p className="mt-1 text-sm text-[#6B7A74]">
-              Enter your price and quantity. Fair Price AI will validate your
-              bid against live market data.
+              Enter your price and quantity. Fair Price AI will set a stable
+              reference range, then validate the negotiated price against it.
             </p>
 
             <div className="mt-6">

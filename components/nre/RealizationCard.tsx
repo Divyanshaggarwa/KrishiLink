@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import ButtonSpinner from "@/components/ButtonSpinner";
+import { optimizeRoute, type RouteOutput } from "@/lib/ai";
 
 type NreQuote = {
   realization: {
@@ -13,16 +14,24 @@ type NreQuote = {
     qualityDeduction: number;
     netRealization: number;
     netPerKg: number;
-    vehicle: string;
     breakdownPerKg: {
       pricePerKg: number;
-      commissionPerKg: number;
+      farmerFeePerKg: number;
       gatewayPerKg: number;
       handlingPerKg: number;
-      transportPerKg: number;
       qualityPerKg: number;
       netPerKg: number;
     };
+  };
+  buyerLandedCost: {
+    totalPayable: number;
+    landedPerKg: number;
+    transportCost: number;
+    vehicle: string;
+  };
+  routeCoordinates: {
+    farm: { lat: number; lng: number };
+    buyer: { lat: number; lng: number };
   };
   mandiBenchmark: {
     mandiNet: number;
@@ -34,16 +43,61 @@ type NreQuote = {
   distanceKm: number;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isNreQuote(value: unknown): value is NreQuote {
+  if (!isRecord(value)) return false;
+  const realization = value.realization;
+  const buyerLandedCost = value.buyerLandedCost;
+  if (!isRecord(realization) || !isRecord(buyerLandedCost)) return false;
+
+  const breakdown = realization.breakdownPerKg;
+  if (!isRecord(breakdown)) return false;
+
+  return (
+    isFiniteNumber(realization.gross) &&
+    isFiniteNumber(realization.netRealization) &&
+    isFiniteNumber(realization.netPerKg) &&
+    isFiniteNumber(breakdown.pricePerKg) &&
+    isFiniteNumber(breakdown.farmerFeePerKg) &&
+    isFiniteNumber(breakdown.gatewayPerKg) &&
+    isFiniteNumber(breakdown.handlingPerKg) &&
+    isFiniteNumber(breakdown.qualityPerKg) &&
+    isFiniteNumber(buyerLandedCost.transportCost) &&
+    isFiniteNumber(buyerLandedCost.landedPerKg) &&
+    isFiniteNumber(buyerLandedCost.totalPayable) &&
+    typeof buyerLandedCost.vehicle === "string" &&
+    isFiniteNumber(value.distanceKm)
+  );
+}
+
+type DeliveryEstimate = {
+  route: RouteOutput;
+  transportTotal: number;
+  estimatedTotal: number;
+  estimatedSavings: number;
+};
+
 export default function RealizationCard({
   listingId,
   offerPrice,
   quantityKg,
+  pickupMode,
 }: {
   listingId: string;
   offerPrice: number;
   quantityKg: number;
+  pickupMode: "pickup" | "delivery";
 }) {
   const [data, setData] = useState<NreQuote | null>(null);
+  const [deliveryEstimate, setDeliveryEstimate] =
+    useState<DeliveryEstimate | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,11 +113,42 @@ export default function RealizationCard({
     const t = setTimeout(async () => {
       try {
         const res = await fetch(
-          `/api/nre/quote?listingId=${listingId}&offerPrice=${offerPrice}`
+          `/api/nre/quote?listingId=${listingId}&offerPrice=${offerPrice}`,
+          { cache: "no-store" }
         );
         if (!res.ok) throw new Error("Could not compute quote");
-        const json = (await res.json()) as NreQuote;
+        const json: unknown = await res.json();
+        if (!isNreQuote(json)) {
+          throw new Error(
+            "The quote response is outdated or incomplete. Refresh the page, and restart the development server if the problem continues."
+          );
+        }
         if (!cancelled) setData(json);
+        if (pickupMode === "delivery") {
+          const route = await optimizeRoute({
+            farmLat: json.routeCoordinates.farm.lat,
+            farmLng: json.routeCoordinates.farm.lng,
+            buyerLat: json.routeCoordinates.buyer.lat,
+            buyerLng: json.routeCoordinates.buyer.lng,
+            weightKg: quantityKg,
+          });
+          if (!cancelled) {
+            const transportTotal = Number(
+              (route.costPerKg * quantityKg).toFixed(2)
+            );
+            const buyerBase =
+              json.buyerLandedCost.totalPayable -
+              json.buyerLandedCost.transportCost;
+            setDeliveryEstimate({
+              route,
+              transportTotal,
+              estimatedTotal: Number((buyerBase + transportTotal).toFixed(2)),
+              estimatedSavings: Number(
+                (json.buyerLandedCost.transportCost - transportTotal).toFixed(2)
+              ),
+            });
+          }
+        }
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
       } finally {
@@ -75,7 +160,7 @@ export default function RealizationCard({
       cancelled = true;
       clearTimeout(t);
     };
-  }, [listingId, offerPrice]);
+  }, [listingId, offerPrice, pickupMode, quantityKg]);
 
   if (loading) {
     return (
@@ -88,7 +173,17 @@ export default function RealizationCard({
     );
   }
 
-  if (error || !data) return null;
+  if (error) {
+    return (
+      <div
+        role="status"
+        className="rounded-2xl border border-[#FFCDD2] bg-[#FFF5F5] p-4 text-sm text-[#C62828]"
+      >
+        {error}
+      </div>
+    );
+  }
+  if (!data) return null;
 
   const { realization: r, mandiBenchmark, deltaVsMandi } = data;
   const positiveDelta = deltaVsMandi !== null && deltaVsMandi > 0;
@@ -100,7 +195,7 @@ export default function RealizationCard({
           Net Realization
         </p>
         <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-[#1B4D3E]">
-          {r.vehicle} · {data.distanceKm} km
+          {data.distanceKm} km to buyer
         </span>
       </div>
 
@@ -120,8 +215,8 @@ export default function RealizationCard({
       <div className="mt-4 space-y-1.5 text-xs">
         <Row label="Offer price" value={`₹${r.breakdownPerKg.pricePerKg.toFixed(2)}/kg`} bold />
         <Row
-          label="− Platform commission"
-          value={`−₹${r.breakdownPerKg.commissionPerKg.toFixed(2)}/kg`}
+          label="− Farmer platform fee"
+          value={`−₹${r.breakdownPerKg.farmerFeePerKg.toFixed(2)}/kg`}
           muted
         />
         <Row
@@ -134,11 +229,6 @@ export default function RealizationCard({
           value={`−₹${r.breakdownPerKg.handlingPerKg.toFixed(2)}/kg`}
           muted
         />
-        <Row
-          label="− Transport"
-          value={`−₹${r.breakdownPerKg.transportPerKg.toFixed(2)}/kg`}
-          muted
-        />
         {r.breakdownPerKg.qualityPerKg > 0 && (
           <Row
             label="− Quality deduction"
@@ -147,6 +237,39 @@ export default function RealizationCard({
           />
         )}
       </div>
+
+      {pickupMode === "pickup" ? (
+        <div className="mt-4 rounded-xl border border-[#C8E6C9] bg-white p-3 text-xs text-[#1B4D3E]">
+          Buyer pickup selected. No delivery cost is included.
+        </div>
+      ) : deliveryEstimate ? (
+        <div className="mt-4 rounded-xl border border-[#C8E6C9] bg-white p-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-[#6B7A74]">
+            {deliveryEstimate.route.source === "ai" ? "Route AI" : "Mock route fallback"}
+            {" · "}{deliveryEstimate.route.vehicle} ·{" "}
+            {deliveryEstimate.route.distanceKm.toFixed(1)} km
+          </p>
+          <p className="mt-1 text-xs text-[#6B7A74]">
+            Estimated buyer-paid transport: ₹
+            {deliveryEstimate.transportTotal.toLocaleString("en-IN")}
+            {" · "}{deliveryEstimate.route.etaMin} min
+          </p>
+          <p className="mt-1 text-xs font-semibold text-[#1B4D3E]">
+            Total including negotiated crop price, buyer fees, and delivery: ₹
+            {deliveryEstimate.estimatedTotal.toLocaleString("en-IN")}
+          </p>
+          <p className="mt-1 text-xs text-[#6B7A74]">
+            {deliveryEstimate.estimatedSavings >= 0
+              ? `Estimated delivery saving: ₹${deliveryEstimate.estimatedSavings.toLocaleString("en-IN")} vs standard route`
+              : `Route estimate is ₹${Math.abs(deliveryEstimate.estimatedSavings).toLocaleString("en-IN")} above standard delivery`}
+          </p>
+        </div>
+      ) : (
+        <div className="mt-4 flex items-center gap-2 rounded-xl border border-[#C8E6C9] bg-white p-3 text-xs text-[#6B7A74]">
+          <ButtonSpinner size={14} />
+          Optimizing delivery route…
+        </div>
+      )}
 
       {/* Mandi comparison */}
       {mandiBenchmark && deltaVsMandi !== null && (

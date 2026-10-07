@@ -1,9 +1,9 @@
 /* ========================================================================
    KrishiLink AI — Shared Type Contracts
-   Every AI response includes `source: "ai" | "mock"` for transparency.
+   Every AI response includes its source for transparency.
    ======================================================================== */
 
-export type AiSource = "ai" | "mock";
+export type AiSource = "ai" | "market-data" | "mock";
 export type QualityGrade = "A" | "B" | "C";
 
 /* -------------------- Fair Price -------------------- */

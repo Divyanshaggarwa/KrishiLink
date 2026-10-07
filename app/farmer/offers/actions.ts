@@ -1,12 +1,14 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getCurrentProfile } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
+import { loadFeeConfig, loadTransportRates } from "@/lib/nre/fetch-config";
 import {
+  calculateNetRealization,
+  calculateTransportOptions,
   estimateDistanceFromDistricts,
-  estimateTransportCostPerKg,
-  TRANSACTION_COST_PER_KG,
   type TransportMode,
 } from "@/lib/netRealization";
 
@@ -23,7 +25,11 @@ export async function acceptOfferAction(
 
   const offerId = String(formData.get("offerId") || "");
   const modeRaw = String(formData.get("transport_mode") || "krishilink");
-  const transportMode: TransportMode = modeRaw === "self" ? "self" : "krishilink";
+  if (!["self", "krishilink"].includes(modeRaw)) {
+    return { error: "Choose a valid delivery option." };
+  }
+  const transportMode: TransportMode =
+    modeRaw === "self" ? "self" : "krishilink";
   const relistLeftover = formData.get("relist_leftover") === "on";
 
   if (!offerId) return { error: "Offer ID missing." };
@@ -33,7 +39,7 @@ export async function acceptOfferAction(
   const { data: offer } = await supabase
     .from("offers")
     .select(
-      "id, listing_id, buyer_id, price_per_kg, quantity_kg, status, listing:listings(id, farmer_id, status, crop, quantity_kg, quality_grade, district, state)"
+      "id, listing_id, buyer_id, price_per_kg, quantity_kg, pickup_mode, status, listing:listings(id, farmer_id, status, crop, quantity_kg, quality_grade, district, state)"
     )
     .eq("id", offerId)
     .single();
@@ -118,14 +124,89 @@ export async function acceptOfferAction(
     buyerProfile?.state ?? null
   );
 
+  const [fees, transportRates] = await Promise.all([
+    loadFeeConfig(),
+    loadTransportRates(),
+  ]);
+  const requiresDelivery = offer.pickup_mode === "delivery";
+  const transportOption = requiresDelivery
+    ? calculateTransportOptions(
+        Number(offer.quantity_kg),
+        distance,
+        transportRates
+      )[0]
+    : null;
+  const transportCostTotal = transportOption?.totalCost ?? 0;
   const transport =
-    transportMode === "self" ? 0 : estimateTransportCostPerKg(distance, offer.quantity_kg);
-  const txn = TRANSACTION_COST_PER_KG;
-  const netPerKg = Number((offer.price_per_kg - transport - txn).toFixed(2));
-  const gross = Number((offer.price_per_kg * offer.quantity_kg).toFixed(2));
-  const net = Number((netPerKg * offer.quantity_kg).toFixed(2));
+    offer.quantity_kg > 0 ? transportCostTotal / offer.quantity_kg : 0;
+  const breakdown = calculateNetRealization(
+    {
+      pricePerKg: Number(offer.price_per_kg),
+      quantityKg: Number(offer.quantity_kg),
+    },
+    (listing.quality_grade ?? "A") as "A" | "B" | "C",
+    fees
+  );
+  const gross = breakdown.grossAmount;
+  const netPerKg = breakdown.netRealizationPerKg;
+  const net = breakdown.netAmount;
+  const buyerTotalPayable = Number(
+    (
+      gross +
+      (gross * (fees.buyer_fee_pct + fees.gateway_pct)) / 100 +
+      transportCostTotal
+    ).toFixed(2)
+  );
+  const transporterFeeTotal =
+    requiresDelivery && transportMode === "krishilink"
+      ? Number(
+          ((transportCostTotal * fees.transporter_fee_pct) / 100).toFixed(2)
+        )
+      : 0;
+  const farmerFeeTotal = Number(
+    ((gross * fees.farmer_fee_pct) / 100).toFixed(2)
+  );
+  const buyerFeeTotal = Number(
+    ((gross * fees.buyer_fee_pct) / 100).toFixed(2)
+  );
+  const gatewayFeeTotal = Number(
+    ((gross * fees.gateway_pct * 2) / 100).toFixed(2)
+  );
+  const handlingTotal = Number(
+    (fees.handling_per_kg * Number(offer.quantity_kg)).toFixed(2)
+  );
+  const qualityDeductionTotal = Number(
+    (breakdown.qualityDeduction * Number(offer.quantity_kg)).toFixed(2)
+  );
+  const platformFeeTotal = Number(
+    (
+      farmerFeeTotal +
+      buyerFeeTotal +
+      gatewayFeeTotal +
+      handlingTotal +
+      qualityDeductionTotal +
+      transporterFeeTotal
+    ).toFixed(2)
+  );
+  let transporterId: string | null = null;
+  if (requiresDelivery && transportMode === "krishilink") {
+    const admin = createAdminClient();
+    const { data: adminProfile } = await admin
+      .from("profiles")
+      .select("id")
+      .eq("role", "admin")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (!adminProfile) {
+      return { error: "KrishiLink's transport payout account is not configured." };
+    }
+    transporterId = adminProfile.id;
+  } else if (requiresDelivery) {
+    transporterId = profile.id;
+  }
 
-  await supabase.from("transactions").insert({
+  const { error: transactionError } = await supabase.from("transactions").insert({
     listing_id: listing.id,
     offer_id: offerId,
     farmer_id: profile.id,
@@ -133,14 +214,30 @@ export async function acceptOfferAction(
     final_price_per_kg: offer.price_per_kg,
     quantity_kg: offer.quantity_kg,
     logistics_cost_per_kg: transport,
-    transaction_cost_per_kg: txn,
+    transaction_cost_per_kg: 0,
     net_realization_per_kg: netPerKg,
     gross_amount: gross,
     net_amount: net,
     distance_km: distance,
-    transport_mode: transportMode,
+    transport_mode: requiresDelivery ? transportMode : "self",
+    transporter_id: transporterId,
+    buyer_total_payable: buyerTotalPayable,
+    transport_cost_total: transportCostTotal,
+    farmer_fee_total: farmerFeeTotal,
+    buyer_fee_total: buyerFeeTotal,
+    gateway_fee_total: gatewayFeeTotal,
+    handling_total: handlingTotal,
+    quality_deduction_total: qualityDeductionTotal,
+    platform_fee_total: platformFeeTotal,
+    transporter_fee_total: transporterFeeTotal,
+    transporter_payout_total: Number(
+      (transportCostTotal - transporterFeeTotal).toFixed(2)
+    ),
     status: "escrow_pending",
   });
+  if (transactionError) {
+    return { error: `Could not create the order: ${transactionError.message}` };
+  }
 
   await supabase.from("notifications").insert({
     user_id: offer.buyer_id,

@@ -19,7 +19,11 @@ export async function updateFeeConfigAction(
 
   const updates: { key: string; value: number }[] = [];
   const keys = [
+    "farmer_fee_pct",
+    "buyer_fee_pct",
+    "transporter_fee_pct",
     "commission_pct",
+    "handling_per_kg",
     "handling_flat",
     "gateway_pct",
     "quality_deduction_A",

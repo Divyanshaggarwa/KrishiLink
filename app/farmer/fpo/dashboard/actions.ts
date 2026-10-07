@@ -3,6 +3,11 @@
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentProfile } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
+import { loadFeeConfig } from "@/lib/nre/fetch-config";
+import {
+  calculateNetRealization,
+  type QualityGrade,
+} from "@/lib/netRealization";
 
 export type PoolActionResult = {
   ok: boolean;
@@ -130,7 +135,7 @@ export async function acceptPoolOfferAction(
   const { data: offer } = await supabase
     .from("offers")
     .select(
-      "id, pool_id, buyer_id, price_per_kg, quantity_kg, status, pool:fpo_pools(id, fpo_id, crop, status)"
+      "id, pool_id, buyer_id, price_per_kg, quantity_kg, status, pool:fpo_pools(id, fpo_id, crop, quality_grade, status)"
     )
     .eq("id", offerId)
     .single();
@@ -176,9 +181,48 @@ export async function acceptPoolOfferAction(
     .neq("id", offerId);
   await supabase.from("fpo_pools").update({ status: "sold" }).eq("id", pool.id);
 
+  const fees = await loadFeeConfig();
   const gross = Number(offer.price_per_kg) * Number(offer.quantity_kg);
-  const txnCost = 0.3 * Number(offer.quantity_kg);
-  const netPool = gross - txnCost;
+  const poolGrade = (pool.quality_grade ?? "A") as QualityGrade;
+  const farmerBreakdown = calculateNetRealization(
+    {
+      pricePerKg: Number(offer.price_per_kg),
+      quantityKg: Number(offer.quantity_kg),
+    },
+    poolGrade,
+    fees
+  );
+  const netPool = farmerBreakdown.netAmount;
+  const buyerTotalPayable = Number(
+    (
+      gross +
+      (gross * (fees.buyer_fee_pct + fees.gateway_pct)) / 100
+    ).toFixed(2)
+  );
+  const farmerFeeTotal = Number(
+    ((gross * fees.farmer_fee_pct) / 100).toFixed(2)
+  );
+  const buyerFeeTotal = Number(
+    ((gross * fees.buyer_fee_pct) / 100).toFixed(2)
+  );
+  const gatewayFeeTotal = Number(
+    ((gross * fees.gateway_pct * 2) / 100).toFixed(2)
+  );
+  const handlingTotal = Number(
+    (fees.handling_per_kg * Number(offer.quantity_kg)).toFixed(2)
+  );
+  const qualityDeductionTotal = Number(
+    (farmerBreakdown.qualityDeduction * Number(offer.quantity_kg)).toFixed(2)
+  );
+  const platformFeeTotal = Number(
+    (
+      farmerFeeTotal +
+      buyerFeeTotal +
+      gatewayFeeTotal +
+      handlingTotal +
+      qualityDeductionTotal
+    ).toFixed(2)
+  );
 
   const { data: txn, error: txnErr } = await supabase
     .from("transactions")
@@ -191,14 +235,24 @@ export async function acceptPoolOfferAction(
       final_price_per_kg: offer.price_per_kg,
       quantity_kg: offer.quantity_kg,
       logistics_cost_per_kg: 0,
-      transaction_cost_per_kg: 0.3,
+      transaction_cost_per_kg: 0,
       net_realization_per_kg: Number(
         (netPool / Number(offer.quantity_kg)).toFixed(2)
       ),
       gross_amount: Number(gross.toFixed(2)),
       net_amount: Number(netPool.toFixed(2)),
       distance_km: 0,
-      transport_mode: "krishilink",
+      transport_mode: "self",
+      buyer_total_payable: buyerTotalPayable,
+      transport_cost_total: 0,
+      farmer_fee_total: farmerFeeTotal,
+      buyer_fee_total: buyerFeeTotal,
+      gateway_fee_total: gatewayFeeTotal,
+      handling_total: handlingTotal,
+      quality_deduction_total: qualityDeductionTotal,
+      platform_fee_total: platformFeeTotal,
+      transporter_fee_total: 0,
+      transporter_payout_total: 0,
       status: "escrow_pending",
     })
     .select("id")
@@ -214,8 +268,7 @@ export async function acceptPoolOfferAction(
   const payoutRows = contribs.map((c) => {
     const sharePct = (Number(c.quantity_kg) / totalContrib) * 100;
     const memberGross = (sharePct / 100) * gross;
-    const memberTxn = (sharePct / 100) * txnCost;
-    const memberNet = memberGross - memberTxn;
+    const memberNet = (sharePct / 100) * netPool;
     return {
       pool_id: pool.id,
       transaction_id: txn.id,
@@ -224,7 +277,7 @@ export async function acceptPoolOfferAction(
       share_pct: Number(sharePct.toFixed(2)),
       gross_amount: Number(memberGross.toFixed(2)),
       logistics_share: 0,
-      txn_share: Number(memberTxn.toFixed(2)),
+      txn_share: Number((memberGross - memberNet).toFixed(2)),
       net_payout: Number(memberNet.toFixed(2)),
       status: "pending" as const,
     };

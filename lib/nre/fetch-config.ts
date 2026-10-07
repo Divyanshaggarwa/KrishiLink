@@ -1,6 +1,10 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
-import type { FeeConfig, TransportRate } from "./compute";
+import {
+  type FeeConfig,
+  type TransportRate,
+} from "./compute";
+import { DEFAULT_TRANSPORT_RATES } from "@/lib/netRealization";
 
 export async function loadFeeConfig(): Promise<FeeConfig> {
   const supabase = await createClient();
@@ -29,12 +33,13 @@ export async function loadTransportRates(): Promise<TransportRate[]> {
     .select("vehicle, rate_per_km, min_weight_kg, max_weight_kg")
     .order("rate_per_km", { ascending: true });
 
-  return (data || []).map((r) => ({
+  const rates = (data || []).map((r) => ({
     vehicle: r.vehicle,
     rate_per_km: Number(r.rate_per_km),
     min_weight_kg: Number(r.min_weight_kg),
     max_weight_kg: Number(r.max_weight_kg),
   }));
+  return rates.length > 0 ? rates : DEFAULT_TRANSPORT_RATES;
 }
 
 export async function loadMandiPrice(

@@ -3,6 +3,13 @@ import Image from "next/image";
 import { requireRole } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import DashboardShell from "@/components/DashboardShell";
+import { BestBuyBox } from "@/components/FairPriceAI";
+import {
+  calculateTransportOptions,
+  estimateDistanceFromDistricts,
+} from "@/lib/netRealization";
+import { loadTransportRates } from "@/lib/nre/fetch-config";
+import type { Listing as RecommendationListing } from "@/lib/fairPrice/engine";
 
 type SearchParams = Promise<{
   crop?: string;
@@ -19,6 +26,7 @@ export default async function BrowsePage({
   const params = await searchParams;
 
   const supabase = await createClient();
+  const transportRates = await loadTransportRates();
 
   let query = supabase
     .from("listings")
@@ -34,6 +42,44 @@ export default async function BrowsePage({
   if (params.grade) query = query.eq("quality_grade", params.grade);
 
   const { data: listings } = await query;
+  const recommendationListings: RecommendationListing[] = (listings ?? [])
+    .flatMap((listing) => {
+      const grade = listing.quality_grade;
+      const askingPrice = Number(listing.expected_price_per_kg);
+      const quantityKg = Number(listing.quantity_kg);
+      if (
+        (grade !== "A" && grade !== "B" && grade !== "C") ||
+        !Number.isFinite(askingPrice) ||
+        askingPrice <= 0 ||
+        !Number.isFinite(quantityKg) ||
+        quantityKg <= 0
+      ) {
+        return [];
+      }
+
+      const distanceKm = estimateDistanceFromDistricts(
+        listing.district,
+        listing.state,
+        profile.district,
+        profile.state
+      );
+      const transport = calculateTransportOptions(
+        quantityKg,
+        distanceKm,
+        transportRates
+      )[0];
+
+      return [
+        {
+          id: listing.id,
+          crop: listing.crop,
+          grade,
+          askingPrice,
+          distanceKm,
+          transportCostPerKg: transport.costPerKg,
+        },
+      ];
+    });
 
   return (
     <DashboardShell
@@ -42,7 +88,9 @@ export default async function BrowsePage({
       title="Browse produce"
       subtitle="Live listings from verified farmers. Place offers directly."
     >
-      {/* Filters */}
+    <BestBuyBox listings={recommendationListings} />
+
+    {/* Filters */}
       <form
         method="get"
         className="mb-6 grid gap-3 rounded-[24px] border border-[#E4EBE6] bg-white p-5 md:grid-cols-[1fr_1fr_auto_auto]"

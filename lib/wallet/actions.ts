@@ -5,6 +5,10 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getCurrentProfile } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import { loadFeeConfig } from "@/lib/nre/fetch-config";
+import {
+  calculateNetRealization,
+  type QualityGrade,
+} from "@/lib/netRealization";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type WalletActionResult = {
@@ -44,8 +48,10 @@ type OrderBreakdown = {
   buyerFee: number;
   gatewayFeeBuyer: number;
   buyerTotal: number;
-  platformEarnings: number;
-  grade: "A" | "B" | "C";
+  platformFeeTotal: number;
+  transporterFee: number;
+  transporterPayout: number;
+  grade: QualityGrade;
 };
 
 async function computeOrderBreakdown(
@@ -53,6 +59,17 @@ async function computeOrderBreakdown(
     gross_amount: number | string;
     quantity_kg: number | string;
     logistics_cost_per_kg: number | string | null;
+    transport_cost_total?: number | string | null;
+    transport_mode?: string | null;
+    buyer_total_payable?: number | string | null;
+    farmer_fee_total?: number | string | null;
+    buyer_fee_total?: number | string | null;
+    gateway_fee_total?: number | string | null;
+    handling_total?: number | string | null;
+    quality_deduction_total?: number | string | null;
+    platform_fee_total?: number | string | null;
+    transporter_fee_total?: number | string | null;
+    transporter_payout_total?: number | string | null;
     listing?: unknown;
     pool?: unknown;
   }
@@ -61,8 +78,10 @@ async function computeOrderBreakdown(
 
   const gross = Number(order.gross_amount);
   const quantity = Number(order.quantity_kg);
-  const transportCost =
-    Number(order.logistics_cost_per_kg || 0) * quantity;
+  const transportCost = Number(
+    order.transport_cost_total ??
+      Number(order.logistics_cost_per_kg || 0) * quantity
+  );
 
   const listing = Array.isArray(order.listing)
     ? order.listing[0]
@@ -74,30 +93,78 @@ async function computeOrderBreakdown(
     (pool as { quality_grade?: string } | undefined)?.quality_grade ??
     "A";
 
-  const grade: "A" | "B" | "C" =
+  const grade: QualityGrade =
     rawGrade === "A" || rawGrade === "B" || rawGrade === "C"
       ? rawGrade
       : "A";
 
-  const gradeDeductionPerKg =
-    grade === "A"
-      ? fees.quality_deduction_A
-      : grade === "B"
-        ? fees.quality_deduction_B
-        : fees.quality_deduction_C;
+  const farmerBreakdown = calculateNetRealization(
+    {
+      pricePerKg: quantity > 0 ? gross / quantity : 0,
+      quantityKg: quantity,
+    },
+    grade,
+    fees
+  );
+  const farmerFee = r2(
+    order.farmer_fee_total == null
+      ? (gross * fees.farmer_fee_pct) / 100
+      : Number(order.farmer_fee_total)
+  );
+  const gatewayFeeTotal = r2(
+    order.gateway_fee_total == null
+      ? (gross * fees.gateway_pct * 2) / 100
+      : Number(order.gateway_fee_total)
+  );
+  const gatewayFeeFarmer = r2(gatewayFeeTotal / 2);
+  const gatewayFeeBuyer = r2(gatewayFeeTotal - gatewayFeeFarmer);
+  const handling = r2(
+    order.handling_total == null
+      ? fees.handling_per_kg * quantity
+      : Number(order.handling_total)
+  );
+  const qualityDeduction = r2(
+    order.quality_deduction_total == null
+      ? farmerBreakdown.qualityDeduction * quantity
+      : Number(order.quality_deduction_total)
+  );
+  const farmerNet = r2(
+    gross - farmerFee - gatewayFeeFarmer - handling - qualityDeduction
+  );
 
-  const farmerFee = (gross * fees.farmer_fee_pct) / 100;
-  const gatewayFeeFarmer = (gross * fees.gateway_pct) / 100;
-  const handling = fees.handling_per_kg * quantity;
-  const qualityDeduction = gradeDeductionPerKg * quantity;
-  const farmerNet =
-    gross - farmerFee - gatewayFeeFarmer - handling - qualityDeduction;
+  const buyerFee = r2(
+    order.buyer_fee_total == null
+      ? (gross * fees.buyer_fee_pct) / 100
+      : Number(order.buyer_fee_total)
+  );
+  const buyerTotal = r2(
+    order.buyer_total_payable == null
+      ? gross + buyerFee + gatewayFeeBuyer + transportCost
+      : Number(order.buyer_total_payable)
+  );
 
-  const buyerFee = (gross * fees.buyer_fee_pct) / 100;
-  const gatewayFeeBuyer = (gross * fees.gateway_pct) / 100;
-  const buyerTotal = gross + buyerFee + gatewayFeeBuyer + transportCost;
-
-  const platformEarnings = buyerTotal - farmerNet;
+  const transporterFee = r2(
+    order.transporter_fee_total == null
+      ? order.transport_mode === "krishilink"
+        ? (transportCost * fees.transporter_fee_pct) / 100
+        : 0
+      : Number(order.transporter_fee_total)
+  );
+  const transporterPayout = r2(
+    order.transporter_payout_total == null
+      ? transportCost - transporterFee
+      : Number(order.transporter_payout_total)
+  );
+  const platformFeeTotal = r2(
+    order.platform_fee_total == null
+      ? farmerFee +
+          gatewayFeeTotal +
+          handling +
+          qualityDeduction +
+          buyerFee +
+          transporterFee
+      : Number(order.platform_fee_total)
+  );
 
   return {
     gross: r2(gross),
@@ -111,7 +178,9 @@ async function computeOrderBreakdown(
     buyerFee: r2(buyerFee),
     gatewayFeeBuyer: r2(gatewayFeeBuyer),
     buyerTotal: r2(buyerTotal),
-    platformEarnings: r2(platformEarnings),
+    platformFeeTotal,
+    transporterFee,
+    transporterPayout,
     grade,
   };
 }
@@ -220,7 +289,7 @@ export async function payEscrowFromWallet(
   const { data: order } = await admin
     .from("transactions")
     .select(
-      "id, buyer_id, farmer_id, pool_id, gross_amount, escrow_amount_paid, status, quantity_kg, logistics_cost_per_kg, listing:listings(crop, quality_grade), pool:fpo_pools(crop, quality_grade, fpo_id)"
+      "id, buyer_id, farmer_id, pool_id, gross_amount, escrow_amount_paid, status, quantity_kg, logistics_cost_per_kg, transport_cost_total, transport_mode, transporter_id, listing:listings(crop, quality_grade), pool:fpo_pools(crop, quality_grade, fpo_id)"
     )
     .eq("id", orderId)
     .single();
@@ -244,6 +313,18 @@ export async function payEscrowFromWallet(
   if (Number(order.escrow_amount_paid) > 0) return { ok: true };
 
   const b = await computeOrderBreakdown(order);
+  let transporterId = order.transporter_id;
+  if (order.transport_mode === "krishilink" && !transporterId) {
+    transporterId = await getPlatformAdminId(admin);
+    if (!transporterId) {
+      return {
+        ok: false,
+        error: "KrishiLink's transport payout account is not configured.",
+      };
+    }
+  } else if (order.transport_mode === "self" && b.transportCost > 0) {
+    transporterId = order.farmer_id;
+  }
 
   const listing = Array.isArray(order.listing)
     ? order.listing[0]
@@ -254,10 +335,9 @@ export async function payEscrowFromWallet(
     (pool as { crop?: string } | undefined)?.crop ??
     "Order";
 
-  // Splits
-  const buyerDebit30 = r2(b.buyerTotal * 0.3);
+  // Escrow is 30% of crop value; fees and transport are settled after delivery.
+  const buyerDebit30 = r2(b.gross * 0.3);
   const farmerLocked30 = r2(b.farmerNet * 0.3);
-  const adminCredit30 = r2(b.platformEarnings * 0.3);
 
   /* -------- 1. Debit buyer 30% -------- */
   const { error: debitErr } = await admin.rpc("wallet_debit", {
@@ -268,21 +348,25 @@ export async function payEscrowFromWallet(
     p_description: `30% escrow · ${crop} · #${order.id.slice(0, 8)}`,
   });
   if (debitErr) {
-    if (debitErr.message.includes("duplicate key")) return { ok: true };
-    return { ok: false, error: debitErr.message };
+    if (!debitErr.message.includes("duplicate key")) {
+      return { ok: false, error: debitErr.message };
+    }
   }
 
   /* -------- 2. Credit farmer (or FPO) 30% as LOCKED -------- */
   if (order.pool_id && pool && (pool as { fpo_id?: string }).fpo_id) {
     const fpoId = (pool as { fpo_id: string }).fpo_id;
 
-    await admin.rpc("fpo_wallet_credit_locked", {
+    const { error: lockedError } = await admin.rpc("fpo_wallet_credit_locked", {
       p_fpo_id: fpoId,
       p_amount: farmerLocked30,
       p_kind: "escrow_locked",
       p_reference_id: order.id,
       p_description: `30% locked escrow · ${crop} pool`,
     });
+    if (lockedError && !lockedError.message.includes("duplicate key")) {
+      return { ok: false, error: lockedError.message };
+    }
 
     await admin.from("notifications").insert({
       user_id: fpoId,
@@ -292,13 +376,16 @@ export async function payEscrowFromWallet(
       link: "/farmer/fpo/dashboard/wallet",
     });
   } else {
-    await admin.rpc("wallet_credit_locked", {
+    const { error: lockedError } = await admin.rpc("wallet_credit_locked", {
       p_user_id: order.farmer_id,
       p_amount: farmerLocked30,
       p_kind: "escrow_locked",
       p_reference_id: order.id,
       p_description: `30% locked escrow · ${crop} order`,
     });
+    if (lockedError && !lockedError.message.includes("duplicate key")) {
+      return { ok: false, error: lockedError.message };
+    }
 
     await admin.from("notifications").insert({
       user_id: order.farmer_id,
@@ -309,27 +396,14 @@ export async function payEscrowFromWallet(
     });
   }
 
-  /* -------- 3. Credit platform admin with the rest -------- */
-  if (adminCredit30 > 0) {
-    const adminId = await getPlatformAdminId(admin);
-    if (adminId) {
-      await admin.rpc("wallet_credit", {
-        p_user_id: adminId,
-        p_amount: adminCredit30,
-        p_kind: "platform_fee_buyer",
-        p_reference_id: order.id,
-        p_description: `Platform + transport fees 30% · #${order.id.slice(0, 8)} (${crop})`,
-      });
-    }
-  }
-
-  /* -------- 4. Update transaction with new breakdown + status -------- */
-  await admin
+  /* -------- 3. Update transaction with new breakdown + status -------- */
+  const { error: updateError } = await admin
     .from("transactions")
     .update({
       escrow_amount_paid: buyerDebit30,
       escrow_paid_at: new Date().toISOString(),
       status: "escrow_paid",
+      transporter_id: transporterId,
       // Store the fee breakdown for audit
       buyer_total_payable: b.buyerTotal,
       transport_cost_total: b.transportCost,
@@ -342,6 +416,7 @@ export async function payEscrowFromWallet(
       updated_at: new Date().toISOString(),
     })
     .eq("id", orderId);
+  if (updateError) return { ok: false, error: updateError.message };
 
   revalidatePath("/wallet");
   revalidatePath("/buyer/orders");
@@ -373,7 +448,7 @@ export async function confirmDeliveryFromWallet(
   const { data: order } = await admin
     .from("transactions")
     .select(
-      "id, buyer_id, farmer_id, pool_id, gross_amount, escrow_amount_paid, final_amount_paid, status, quantity_kg, logistics_cost_per_kg, listing:listings(crop, quality_grade), pool:fpo_pools(crop, quality_grade, fpo_id)"
+      "id, buyer_id, farmer_id, pool_id, gross_amount, escrow_amount_paid, final_amount_paid, status, quantity_kg, logistics_cost_per_kg, transport_cost_total, transport_mode, transporter_id, listing:listings(crop, quality_grade), pool:fpo_pools(crop, quality_grade, fpo_id)"
     )
     .eq("id", orderId)
     .single();
@@ -384,18 +459,33 @@ export async function confirmDeliveryFromWallet(
 
   // Idempotency
   if (order.status === "completed") return { ok: true };
-  if (Number(order.final_amount_paid) > 0) {
-    await admin
-      .from("transactions")
-      .update({ status: "completed", updated_at: new Date().toISOString() })
-      .eq("id", orderId);
-    return { ok: true };
-  }
   if (order.status !== "delivered") {
     return { ok: false, error: "Seller hasn't marked this as delivered yet." };
   }
 
   const b = await computeOrderBreakdown(order);
+  const adminId = await getPlatformAdminId(admin);
+  let transporterId = order.transporter_id;
+  if (b.transportCost > 0 && order.transport_mode === "krishilink") {
+    transporterId = transporterId ?? adminId;
+    if (!transporterId) {
+      return {
+        ok: false,
+        error: "KrishiLink's transport payout account is not configured.",
+      };
+    }
+  } else if (b.transportCost > 0 && order.transport_mode === "self") {
+    transporterId = transporterId ?? order.farmer_id;
+  }
+  if (
+    b.platformFeeTotal > 0 &&
+    !adminId
+  ) {
+    return { ok: false, error: "Platform fee wallet is not configured." };
+  }
+  if (b.transportCost > 0 && !transporterId) {
+    return { ok: false, error: "Transport payout account is not configured." };
+  }
 
   const listing = Array.isArray(order.listing)
     ? order.listing[0]
@@ -406,10 +496,11 @@ export async function confirmDeliveryFromWallet(
     (pool as { crop?: string } | undefined)?.crop ??
     "Order";
 
-  const buyerDebit70 = r2(b.buyerTotal * 0.7);
+  const buyerDebit70 = r2(
+    Math.max(0, b.buyerTotal - Number(order.escrow_amount_paid || 0))
+  );
   const farmerUnlock30 = r2(b.farmerNet * 0.3);
   const farmerCredit70 = r2(b.farmerNet * 0.7);
-  const adminCredit70 = r2(b.platformEarnings * 0.7);
 
   /* -------- 1. Debit buyer 70% -------- */
   const { error: debitErr } = await admin.rpc("wallet_debit", {
@@ -420,8 +511,9 @@ export async function confirmDeliveryFromWallet(
     p_description: `Final 70% · ${crop} · #${order.id.slice(0, 8)}`,
   });
   if (debitErr) {
-    if (debitErr.message.includes("duplicate key")) return { ok: true };
-    return { ok: false, error: debitErr.message };
+    if (!debitErr.message.includes("duplicate key")) {
+      return { ok: false, error: debitErr.message };
+    }
   }
 
   /* -------- 2. Unlock + credit seller -------- */
@@ -429,22 +521,28 @@ export async function confirmDeliveryFromWallet(
     const fpoId = (pool as { fpo_id: string }).fpo_id;
 
     // Unlock the 30% that was locked at escrow
-    await admin.rpc("fpo_wallet_unlock", {
+    const { error: unlockError } = await admin.rpc("fpo_wallet_unlock", {
       p_fpo_id: fpoId,
       p_amount: farmerUnlock30,
       p_kind: "escrow_unlocked",
       p_reference_id: order.id,
       p_description: `Unlocked 30% · ${crop} pool`,
     });
+    if (unlockError && !unlockError.message.includes("duplicate key")) {
+      return { ok: false, error: unlockError.message };
+    }
 
     // Credit the 70%
-    await admin.rpc("fpo_wallet_credit", {
+    const { error: creditError } = await admin.rpc("fpo_wallet_credit", {
       p_fpo_id: fpoId,
       p_amount: farmerCredit70,
       p_kind: "pool_received",
       p_reference_id: order.id,
       p_description: `70% final · ${crop} pool`,
     });
+    if (creditError && !creditError.message.includes("duplicate key")) {
+      return { ok: false, error: creditError.message };
+    }
 
     // Now FPO wallet holds 100% of farmerNet — distribute to members
     const { data: payouts } = await admin
@@ -455,26 +553,38 @@ export async function confirmDeliveryFromWallet(
 
     if (payouts && payouts.length > 0) {
       for (const p of payouts) {
-        await admin.rpc("fpo_wallet_debit", {
+        const { error: debitError } = await admin.rpc("fpo_wallet_debit", {
           p_fpo_id: fpoId,
           p_amount: Number(p.net_payout),
           p_kind: "member_distribution",
           p_reference_id: order.id,
           p_description: `Share → member (${p.quantity_kg} kg · ${Number(p.share_pct).toFixed(1)}%)`,
         });
+        if (debitError && !debitError.message.includes("duplicate key")) {
+          return { ok: false, error: debitError.message };
+        }
 
-        await admin.rpc("wallet_credit", {
+        const { error: memberCreditError } = await admin.rpc("wallet_credit", {
           p_user_id: p.member_id,
           p_amount: Number(p.net_payout),
           p_kind: "pool_share",
           p_reference_id: order.id,
           p_description: `Pool share · ${crop}`,
         });
+        if (
+          memberCreditError &&
+          !memberCreditError.message.includes("duplicate key")
+        ) {
+          return { ok: false, error: memberCreditError.message };
+        }
 
-        await admin
+        const { error: payoutUpdateError } = await admin
           .from("fpo_pool_payouts")
           .update({ status: "released" })
           .eq("id", p.id);
+        if (payoutUpdateError) {
+          return { ok: false, error: payoutUpdateError.message };
+        }
 
         await admin.from("notifications").insert({
           user_id: p.member_id,
@@ -487,22 +597,28 @@ export async function confirmDeliveryFromWallet(
     }
   } else {
     // Unlock farmer's 30%
-    await admin.rpc("wallet_unlock", {
+    const { error: unlockError } = await admin.rpc("wallet_unlock", {
       p_user_id: order.farmer_id,
       p_amount: farmerUnlock30,
       p_kind: "escrow_unlocked",
       p_reference_id: order.id,
       p_description: `Unlocked 30% · ${crop} order`,
     });
+    if (unlockError && !unlockError.message.includes("duplicate key")) {
+      return { ok: false, error: unlockError.message };
+    }
 
     // Credit farmer's 70%
-    await admin.rpc("wallet_credit", {
+    const { error: creditError } = await admin.rpc("wallet_credit", {
       p_user_id: order.farmer_id,
       p_amount: farmerCredit70,
       p_kind: "payout_received",
       p_reference_id: order.id,
       p_description: `70% final · ${crop} order`,
     });
+    if (creditError && !creditError.message.includes("duplicate key")) {
+      return { ok: false, error: creditError.message };
+    }
 
     await admin.from("notifications").insert({
       user_id: order.farmer_id,
@@ -513,30 +629,74 @@ export async function confirmDeliveryFromWallet(
     });
   }
 
-  /* -------- 3. Credit admin 70% of platform fees -------- */
-  if (adminCredit70 > 0) {
-    const adminId = await getPlatformAdminId(admin);
-    if (adminId) {
-      await admin.rpc("wallet_credit", {
-        p_user_id: adminId,
-        p_amount: adminCredit70,
-        p_kind: "platform_fee_buyer",
+  /* -------- 3. Settle platform and transport charges at completion -------- */
+  const platformFeeExcludingTransporterFee = r2(
+    b.platformFeeTotal - b.transporterFee
+  );
+  if (platformFeeExcludingTransporterFee > 0 && adminId) {
+    const { error } = await admin.rpc("wallet_credit", {
+      p_user_id: adminId,
+      p_amount: platformFeeExcludingTransporterFee,
+      p_kind: "platform_fee_buyer",
+      p_reference_id: order.id,
+      p_description: `Completed-order platform fees · #${order.id.slice(0, 8)} (${crop})`,
+    });
+    if (error && !error.message.includes("duplicate key")) {
+      return { ok: false, error: error.message };
+    }
+  }
+
+  if (b.transportCost > 0 && transporterId) {
+    const transportCredit =
+      order.transport_mode === "krishilink"
+        ? b.transporterPayout
+        : b.transportCost;
+    if (transportCredit > 0) {
+      const { error } = await admin.rpc("wallet_credit", {
+        p_user_id: transporterId,
+        p_amount: transportCredit,
+        p_kind:
+          order.transport_mode === "krishilink"
+            ? "transport_payout"
+            : "transport_reimbursement",
         p_reference_id: order.id,
-        p_description: `Platform + transport fees 70% · #${order.id.slice(0, 8)} (${crop})`,
+        p_description: `Completed-order transport payment · #${order.id.slice(0, 8)} (${crop})`,
       });
+      if (error && !error.message.includes("duplicate key")) {
+        return { ok: false, error: error.message };
+      }
+    }
+    if (order.transport_mode === "krishilink" && b.transporterFee > 0 && adminId) {
+      const { error } = await admin.rpc("wallet_credit", {
+        p_user_id: adminId,
+        p_amount: b.transporterFee,
+        p_kind: "transporter_fee",
+        p_reference_id: order.id,
+        p_description: `KrishiLink transport fee · #${order.id.slice(0, 8)} (${crop})`,
+      });
+      if (error && !error.message.includes("duplicate key")) {
+        return { ok: false, error: error.message };
+      }
     }
   }
 
   /* -------- 4. Mark complete -------- */
-  await admin
+  const { error: completionError } = await admin
     .from("transactions")
     .update({
       final_amount_paid: buyerDebit70,
       final_paid_at: new Date().toISOString(),
+      transporter_id: transporterId,
+      transporter_fee_total: b.transporterFee,
+      transporter_payout_total: b.transporterPayout,
+      platform_fee_total: b.platformFeeTotal,
       status: "completed",
       updated_at: new Date().toISOString(),
     })
     .eq("id", orderId);
+  if (completionError) {
+    return { ok: false, error: completionError.message };
+  }
 
   /* -------- 5. Trust bumps -------- */
   await admin.rpc("bump_trust", { p_user: order.farmer_id, p_delta: 2 });

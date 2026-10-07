@@ -1,12 +1,19 @@
 "use client";
 
-import { useActionState, useEffect, useState, useCallback } from "react";
+import {
+  useActionState,
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+} from "react";
 import Image from "next/image";
 import { createListingAction, type ListingState } from "./actions";
 import { predictQuality } from "@/lib/ai/client";
 import { isRoboflowSupported } from "@/lib/ai/roboflow";
 import { createClient } from "@/lib/supabase/client";
 import ButtonSpinner from "@/components/ButtonSpinner";
+import { FairPriceCard } from "@/components/FairPriceAI";
 
 type Profile = {
   id: string;
@@ -53,10 +60,12 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [publicPhotoUrl, setPublicPhotoUrl] = useState<string | null>(null);
   const [aiStatus, setAiStatus] = useState<AiStatus>({ kind: "idle" });
+  const analysisRequestId = useRef(0);
 
   /* ---------------- Upload photo + run AI ---------------- */
   const analyzePhoto = useCallback(
     async (file: File, cropName: string) => {
+      const requestId = ++analysisRequestId.current;
       setAiStatus({ kind: "uploading" });
 
       const supabase = createClient();
@@ -64,6 +73,7 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
         data: { user },
       } = await supabase.auth.getUser();
 
+      if (requestId !== analysisRequestId.current) return;
       if (!user) {
         setAiStatus({ kind: "failed", reason: "Not signed in" });
         return;
@@ -76,6 +86,7 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
         .from("listing-photos")
         .upload(filename, file, { upsert: false, contentType: file.type });
 
+      if (requestId !== analysisRequestId.current) return;
       if (upErr) {
         console.warn("[ai] upload failed:", upErr.message);
         setAiStatus({ kind: "failed", reason: "Photo upload failed" });
@@ -87,6 +98,7 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
         .getPublicUrl(filename);
 
       const url = urlData.publicUrl;
+      if (requestId !== analysisRequestId.current) return;
       setPublicPhotoUrl(url);
 
       if (!cropName) {
@@ -100,7 +112,8 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
         const base64 = String(reader.result).split(",")[1] || "";
         try {
           const result = await predictQuality(base64, cropName, url);
-          setGrade(result.grade);
+          if (requestId !== analysisRequestId.current) return;
+          setGrade(result.cropMatchesInput ? result.grade : "");
           setAiStatus({
             kind: "done",
             grade: result.grade,
@@ -110,8 +123,21 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
             cropMatchConfidence: result.cropMatchConfidence,
           });
         } catch (err) {
+          if (requestId !== analysisRequestId.current) return;
           console.warn("[ai] analysis failed:", err);
-          setAiStatus({ kind: "failed", reason: "Analysis failed" });
+          setGrade("");
+          setAiStatus({
+            kind: "failed",
+            reason:
+              err instanceof Error
+                ? err.message
+                : "Crop verification failed",
+          });
+        }
+      };
+      reader.onerror = () => {
+        if (requestId === analysisRequestId.current) {
+          setAiStatus({ kind: "failed", reason: "Could not read the photo" });
         }
       };
       reader.readAsDataURL(file);
@@ -121,7 +147,9 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
 
   /* ---------------- Photo selection handler ---------------- */
   function handlePhotoChange(file: File | null) {
+    analysisRequestId.current += 1;
     setPhoto(file);
+    setGrade("");
     setPublicPhotoUrl(null);
     setAiStatus({ kind: "idle" });
 
@@ -194,7 +222,12 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
                 name="crop"
                 required
                 value={crop}
-                onChange={setCrop}
+                onChange={(value) => {
+                  analysisRequestId.current += 1;
+                  setCrop(value);
+                  setGrade("");
+                  setAiStatus({ kind: "idle" });
+                }}
                 placeholder="e.g. Onion, Tomato, Potato"
               />
               <Field
@@ -236,11 +269,12 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
                     key={g}
                     type="button"
                     onClick={() => setGrade(g)}
+                    disabled={cropMismatch}
                     className={`rounded-xl border px-4 py-3 text-sm font-medium transition-colors ${
                       grade === g
                         ? "border-[#1B4D3E] bg-[#1B4D3E] text-white"
                         : "border-[#E4EBE6] bg-white text-[#6B7A74] hover:border-[#2E7D32]"
-                    }`}
+                    } disabled:cursor-not-allowed disabled:opacity-50`}
                   >
                     Grade {g}
                   </button>
@@ -263,9 +297,16 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
               placeholder="e.g. 24"
             />
             <p className="text-[11px] text-[#6B7A74]">
-              Fair Price AI will validate this against the buyer&apos;s bid and
-              live market data when a buyer places an offer.
+              Fair Price AI compares buyer offers with a grade-specific
+              historical market band where data is available.
             </p>
+            <FairPriceCard
+              crop={crop}
+              grade={grade}
+              askingPrice={
+                expectedPrice.trim() ? Number(expectedPrice) : undefined
+              }
+            />
           </Section>
         </div>
 

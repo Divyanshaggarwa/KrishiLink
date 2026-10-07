@@ -169,14 +169,12 @@ export function mockRoute(input: RouteInput): RouteOutput {
 
 /* -------------------- Fairness -------------------- */
 export function mockFairness(input: FairnessInput): FairnessOutput {
-  const anchor =
-    (input.farmerExpectedPrice +
-      input.buyerBid +
-      (CROP_BASE[input.crop.toLowerCase()] ?? 25)) /
-    3;
+  const cropBase = CROP_BASE[input.crop.toLowerCase()] ?? 25;
+  const anchor = (input.farmerExpectedPrice + cropBase) / 2;
   const mid = anchor * QUALITY_MULT[input.quality];
-  const low = Number((mid - 1.5).toFixed(2));
-  const high = Number((mid + 1.5).toFixed(2));
+  const margin = Math.max(1.5, mid * 0.12);
+  const low = Number(Math.max(0, mid - margin).toFixed(2));
+  const high = Number((mid + margin).toFixed(2));
 
   const farmerVerdict = verdict(input.farmerExpectedPrice, low, high);
   const buyerVerdict = verdict(input.buyerBid, low, high);
@@ -205,9 +203,9 @@ export function mockFairness(input: FairnessInput): FairnessOutput {
     fairMid: Number(mid.toFixed(2)),
     confidence: 0.74,
     factors: [
-      `Crop base: ₹${CROP_BASE[input.crop.toLowerCase()] ?? 25}/kg`,
+      `Crop reference: ₹${cropBase}/kg`,
       `Farmer asks ₹${input.farmerExpectedPrice}/kg`,
-      `Buyer bids ₹${input.buyerBid}/kg`,
+      "The fair range stays fixed while the buyer adjusts their offer.",
     ],
     farmerVerdict,
     buyerVerdict,
