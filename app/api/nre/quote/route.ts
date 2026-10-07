@@ -79,10 +79,8 @@ export async function GET(req: NextRequest) {
   const realization = computeRealization({
     offerPricePerKg: offerPrice,
     quantityKg: listing.quantity_kg,
-    distanceKm,
     grade,
     feeConfig,
-    transportRates,
   });
 
   // Mandi benchmark (assume 60 km to mandi for demo, 6% APMC commission, 3% spoilage)
