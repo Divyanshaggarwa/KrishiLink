@@ -110,6 +110,7 @@ export function mockQuality(input: {
     detectedCrop,
     cropMatchesInput,
     cropMatchConfidence,
+    cropVerified: detectedCrop !== null,   // ← ✅ ADDED
     source: "mock",
   };
 }
