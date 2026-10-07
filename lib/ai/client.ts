@@ -16,7 +16,11 @@ import {
   mockRoute,
   mockFairness,
 } from "./mock";
-import { callRoboflowQuality, isRoboflowSupported } from "./roboflow";
+import {
+  callRoboflowQuality,
+  isRoboflowSupported,
+  canonicalCrop,
+} from "./roboflow";
 import { fairPrice as lookupMarketFairPrice } from "@/lib/fairPrice/engine";
 
 const AI_URL = process.env.NEXT_PUBLIC_AI_URL || "";
@@ -65,15 +69,22 @@ export async function predictQuality(
   /* ---- 1. Try Roboflow (only for supported crops) ---- */
   if (crop && imageUrl && isRoboflowSupported(crop)) {
     const roboflow = await callRoboflowQuality(imageUrl);
-    if (roboflow?.grade && roboflow.detectedCrop) {
-      const cropMatchesInput = cropsMatch(roboflow.detectedCrop, inputCrop);
+
+    // ✅ Accept grade even if crop wasn't returned
+    if (roboflow?.grade) {
+      const hasCrop = !!roboflow.detectedCrop;
+      const cropMatchesInput = hasCrop
+        ? cropsMatch(roboflow.detectedCrop!, inputCrop)
+        : true; // can't verify → don't punish the farmer
+
       return {
         grade: roboflow.grade,
         confidence: roboflow.confidence,
         defects: [],
         detectedCrop: roboflow.detectedCrop,
         cropMatchesInput,
-        cropMatchConfidence: roboflow.confidence,
+        cropMatchConfidence: hasCrop ? roboflow.confidence : 0,
+        cropVerified: hasCrop,
         source: "ai",
       };
     }
@@ -85,20 +96,34 @@ export async function predictQuality(
     crop: inputCrop,
   });
 
-  if (ai?.grade && ai.detectedCrop) {
-    const cropMatchesInput = cropsMatch(ai.detectedCrop, inputCrop);
+  if (ai?.grade) {
+    const hasCrop = !!ai.detectedCrop;
+    const cropMatchesInput = hasCrop
+      ? cropsMatch(ai.detectedCrop!, inputCrop)
+      : true;
     return {
       grade: ai.grade,
       confidence: ai.confidence ?? 0.7,
       defects: ai.defects ?? [],
-      detectedCrop: ai.detectedCrop,
+      detectedCrop: ai.detectedCrop ?? null,
       cropMatchesInput,
-      cropMatchConfidence: ai.cropMatchConfidence ?? 0.7,
+      cropMatchConfidence: ai.cropMatchConfidence ?? (hasCrop ? 0.7 : 0),
+      cropVerified: hasCrop,
       source: "ai",
     };
   }
 
-  if (!inputCrop) return mockQuality({ imageBase64 });
+  /* ---- 3. Unsupported crop: return mock with manual-entry fallback ---- */
+  // Rather than throwing, hand back a low-confidence mock so the UI
+  // can still let the farmer pick a grade manually.
+  if (inputCrop && !isRoboflowSupported(inputCrop)) {
+    return {
+      ...mockQuality({ imageBase64 }),
+      detectedCrop: inputCrop,
+      cropMatchesInput: true,
+      cropVerified: false,
+    };
+  }
 
   throw new Error(
     "The AI could not identify the crop in the photo. A grade cannot be selected until the crop is verified."
@@ -106,9 +131,9 @@ export async function predictQuality(
 }
 
 function cropsMatch(detectedCrop: string, inputCrop: string): boolean {
-  const normalize = (value: string) =>
-    value.toLowerCase().replace(/[^a-z0-9]/g, "");
-  return normalize(detectedCrop) === normalize(inputCrop);
+  const a = canonicalCrop(detectedCrop) ?? detectedCrop.toLowerCase();
+  const b = canonicalCrop(inputCrop) ?? inputCrop.toLowerCase();
+  return a === b;
 }
 
 /* -------------------- Demand -------------------- */

@@ -15,6 +15,21 @@ export interface FairPriceInput {
   month: number;
 }
 
+export interface QualityOutput {
+  grade: QualityGrade;
+  confidence: number;
+  defects: string[];
+  /** Crop name the AI actually detected in the photo (null if the model didn't output one). */
+  detectedCrop: string | null;
+  /** Does the detected crop match the farmer's input crop? (true if crop was not returned) */
+  cropMatchesInput: boolean;
+  /** AI's confidence in the crop detection (0–1). 0 when crop wasn't returned. */
+  cropMatchConfidence: number;
+  /** True if the AI actually returned a crop name we could verify against. */
+  cropVerified: boolean;
+  source: AiSource;
+}
+
 export interface FairPriceOutput {
   low: number;
   high: number;

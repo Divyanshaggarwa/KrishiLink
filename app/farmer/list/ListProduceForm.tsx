@@ -35,6 +35,7 @@ type AiStatus =
       detectedCrop: string | null;
       cropMatchesInput: boolean;
       cropMatchConfidence: number;
+      cropVerified: boolean;
     }
   | { kind: "failed"; reason: string };
 
@@ -107,7 +108,10 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
       }
 
       setAiStatus({ kind: "analyzing" });
+
       const reader = new FileReader();
+
+      // ✅ onload handler — properly scoped arrow function
       reader.onload = async () => {
         const base64 = String(reader.result).split(",")[1] || "";
         try {
@@ -121,6 +125,7 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
             detectedCrop: result.detectedCrop,
             cropMatchesInput: result.cropMatchesInput,
             cropMatchConfidence: result.cropMatchConfidence,
+            cropVerified: result.cropVerified,
           });
         } catch (err) {
           if (requestId !== analysisRequestId.current) return;
@@ -129,17 +134,19 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
           setAiStatus({
             kind: "failed",
             reason:
-              err instanceof Error
-                ? err.message
-                : "Crop verification failed",
+              err instanceof Error ? err.message : "Crop verification failed",
           });
         }
-      };
+      }; // ✅ ← this closing was missing before
+
+      // ✅ onerror handler — sibling of onload, NOT nested inside it
       reader.onerror = () => {
         if (requestId === analysisRequestId.current) {
           setAiStatus({ kind: "failed", reason: "Could not read the photo" });
         }
       };
+
+      // ✅ kick off the read last
       reader.readAsDataURL(file);
     },
     []
@@ -168,13 +175,11 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
   useEffect(() => {
     if (!photo) return;
 
-    if (crop && isRoboflowSupported(crop)) {
+    if (crop) {
+      // Run regardless of support — mock/AI will decide how to handle it
       if (aiStatus.kind === "idle" || aiStatus.kind === "unsupported") {
         void analyzePhoto(photo, crop);
       }
-    } else if (crop && !isRoboflowSupported(crop)) {
-      // Still run the mock/AI for verification even on unsupported crops
-      void analyzePhoto(photo, crop);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [crop]);
@@ -186,9 +191,15 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
     };
   }, [previewUrl]);
 
-  /* ---------------- Derived: crop mismatch? ---------------- */
+  /* ---------------- Derived flags ---------------- */
+  // Hard block ONLY when the AI genuinely verified a different crop.
   const cropMismatch =
-    aiStatus.kind === "done" && !aiStatus.cropMatchesInput;
+    aiStatus.kind === "done" &&
+    aiStatus.cropVerified &&
+    !aiStatus.cropMatchesInput;
+
+  // Soft info when AI returned a grade but couldn't verify crop.
+  const cropUnverified = aiStatus.kind === "done" && !aiStatus.cropVerified;
 
   /* ---------------- Render ---------------- */
   return (
@@ -202,9 +213,7 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
       <input
         type="hidden"
         name="crop_match_confidence"
-        value={
-          aiStatus.kind === "done" ? aiStatus.cropMatchConfidence : ""
-        }
+        value={aiStatus.kind === "done" ? aiStatus.cropMatchConfidence : ""}
       />
       <input
         type="hidden"
@@ -410,6 +419,13 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
         </div>
       )}
 
+      {cropUnverified && (
+        <div className="rounded-xl border border-[#FFE0B2] bg-[#FFF8E1] p-3 text-xs text-[#B26A00]">
+          ⓘ The AI returned a grade but could not verify the crop name from the
+          photo. You may still publish if the grade is correct.
+        </div>
+      )}
+
       <div className="flex justify-end gap-3 border-t border-[#E4EBE6] pt-6">
         <button
           type="submit"
@@ -451,7 +467,7 @@ function AiStatusLine({
   if (status.kind === "analyzing") {
     return (
       <p className="mt-2 flex items-center gap-1.5 text-xs text-[#6B7A74]">
-        <ButtonSpinner size={12} /> AI analyzing quality & crop…
+        <ButtonSpinner size={12} /> AI analyzing quality &amp; crop…
       </p>
     );
   }
@@ -467,28 +483,37 @@ function AiStatusLine({
 
   if (status.kind === "done") {
     const gradePct = Math.round(status.confidence * 100);
-    const matchPct = Math.round(status.cropMatchConfidence * 100);
 
-    if (!status.cropMatchesInput) {
+    // Case 1: Crop mismatch (verified) → hard error
+    if (status.cropVerified && !status.cropMatchesInput) {
+      const matchPct = Math.round(status.cropMatchConfidence * 100);
       return (
         <p className="mt-2 rounded-lg border border-[#FFCDD2] bg-[#FFF5F5] px-3 py-2 text-[11px] font-medium text-[#C62828]">
-          ⚠ AI detected <strong>{status.detectedCrop ?? "another crop"}</strong>{" "}
-          (not {inputCrop || "your input"}). Match confidence: {matchPct}%.
+          ⚠ AI detected{" "}
+          <strong>{status.detectedCrop ?? "another crop"}</strong> (not{" "}
+          {inputCrop || "your input"}). Match confidence: {matchPct}%.
         </p>
       );
     }
 
+    // Case 2: Crop verified + matched → green
+    if (status.cropVerified) {
+      const matchPct = Math.round(status.cropMatchConfidence * 100);
+      return (
+        <p className="mt-2 rounded-lg bg-[#EAF5EE] px-3 py-2 text-[11px] font-medium text-[#2E7D32]">
+          ✓ AI graded <strong>Grade {status.grade}</strong> · {gradePct}%
+          confidence · Detected <strong>{status.detectedCrop}</strong> ({matchPct}
+          % match)
+        </p>
+      );
+    }
+
+    // Case 3: Grade found but crop not returned by model → soft info
     return (
-      <p className="mt-2 rounded-lg bg-[#EAF5EE] px-3 py-2 text-[11px] font-medium text-[#2E7D32]">
-        ✓ AI graded <strong>Grade {status.grade}</strong> · {gradePct}%
-        confidence
-        {status.detectedCrop && (
-          <>
-            {" "}
-            · Detected <strong>{status.detectedCrop}</strong> ({matchPct}%
-            match)
-          </>
-        )}
+      <p className="mt-2 rounded-lg bg-[#FFF8E1] px-3 py-2 text-[11px] text-[#B26A00]">
+        ⓘ AI graded <strong>Grade {status.grade}</strong> ({gradePct}%
+        confidence). Crop could not be auto-verified — please confirm grade
+        manually.
       </p>
     );
   }

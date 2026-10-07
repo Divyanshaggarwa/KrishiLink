@@ -66,6 +66,9 @@ Smallholders (<2 acres) cannot fulfill bulk buyer orders independently. KrishiLi
 - Farmers upload produce photos during listing.
 - Server-side proxy (`app/api/ai/quality`) sends image to Roboflow workflow.
 - Roboflow classes must include both crop and grade, for example `Onion_A`.
+- The response parser supports nested workflow outputs and separate crop and
+  grade classification outputs, including `class`, `class_name`, and `top`
+  labels. Both labels must be present before the AI grade is applied.
 - The listing form compares the detected crop with the entered crop; a mismatch
   clears and disables grade selection, and the listing cannot be published.
 - A grade-only response is insufficient for verification. When the AI cannot

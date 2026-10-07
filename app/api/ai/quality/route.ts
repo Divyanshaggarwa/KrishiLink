@@ -50,9 +50,12 @@ export async function POST(req: NextRequest) {
         { status: res.status }
       );
     }
-
+    
     const data = JSON.parse(text);
+    console.log("[roboflow proxy] ← ", JSON.stringify(data).slice(0, 1500));
     return NextResponse.json(data);
+
+    
   } catch (err) {
     console.error("[roboflow proxy] error:", err);
     return NextResponse.json(
