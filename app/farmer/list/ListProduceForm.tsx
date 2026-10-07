@@ -21,7 +21,14 @@ type AiStatus =
   | { kind: "unsupported"; crop: string }
   | { kind: "uploading" }
   | { kind: "analyzing" }
-  | { kind: "done"; grade: "A" | "B" | "C"; confidence: number }
+  | {
+      kind: "done";
+      grade: "A" | "B" | "C";
+      confidence: number;
+      detectedCrop: string | null;
+      cropMatchesInput: boolean;
+      cropMatchConfidence: number;
+    }
   | { kind: "failed"; reason: string };
 
 export default function ListProduceForm({ profile }: { profile: Profile }) {
@@ -50,7 +57,6 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
   /* ---------------- Upload photo + run AI ---------------- */
   const analyzePhoto = useCallback(
     async (file: File, cropName: string) => {
-      // Step 1: Upload to Supabase Storage
       setAiStatus({ kind: "uploading" });
 
       const supabase = createClient();
@@ -83,13 +89,11 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
       const url = urlData.publicUrl;
       setPublicPhotoUrl(url);
 
-      // Step 2: Check if crop is supported by Roboflow
-      if (!cropName || !isRoboflowSupported(cropName)) {
-        setAiStatus({ kind: "unsupported", crop: cropName || "this crop" });
+      if (!cropName) {
+        setAiStatus({ kind: "unsupported", crop: "this crop" });
         return;
       }
 
-      // Step 3: Read base64 (for fallback mock)
       setAiStatus({ kind: "analyzing" });
       const reader = new FileReader();
       reader.onload = async () => {
@@ -101,6 +105,9 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
             kind: "done",
             grade: result.grade,
             confidence: result.confidence,
+            detectedCrop: result.detectedCrop,
+            cropMatchesInput: result.cropMatchesInput,
+            cropMatchConfidence: result.cropMatchConfidence,
           });
         } catch (err) {
           console.warn("[ai] analysis failed:", err);
@@ -126,7 +133,6 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
     const url = URL.createObjectURL(file);
     setPreviewUrl(url);
 
-    // Auto-run analysis if crop already selected
     void analyzePhoto(file, crop);
   }
 
@@ -134,14 +140,13 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
   useEffect(() => {
     if (!photo) return;
 
-    // Only re-run for supported crops
     if (crop && isRoboflowSupported(crop)) {
-      // Avoid double-run right after photo upload
       if (aiStatus.kind === "idle" || aiStatus.kind === "unsupported") {
         void analyzePhoto(photo, crop);
       }
     } else if (crop && !isRoboflowSupported(crop)) {
-      setAiStatus({ kind: "unsupported", crop });
+      // Still run the mock/AI for verification even on unsupported crops
+      void analyzePhoto(photo, crop);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [crop]);
@@ -153,17 +158,34 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
     };
   }, [previewUrl]);
 
+  /* ---------------- Derived: crop mismatch? ---------------- */
+  const cropMismatch =
+    aiStatus.kind === "done" && !aiStatus.cropMatchesInput;
+
   /* ---------------- Render ---------------- */
   return (
     <form action={formAction} className="space-y-8">
+      <input type="hidden" name="photo_url" value={publicPhotoUrl ?? ""} />
       <input
         type="hidden"
-        name="photo_url"
-        value={publicPhotoUrl ?? ""}
+        name="ai_detected_crop"
+        value={aiStatus.kind === "done" ? aiStatus.detectedCrop ?? "" : ""}
+      />
+      <input
+        type="hidden"
+        name="crop_match_confidence"
+        value={
+          aiStatus.kind === "done" ? aiStatus.cropMatchConfidence : ""
+        }
+      />
+      <input
+        type="hidden"
+        name="crop_mismatch"
+        value={cropMismatch ? "true" : "false"}
       />
 
       <div className="grid gap-8 lg:grid-cols-[1.1fr_1fr]">
-        {/* ================= LEFT: CROP + QUALITY + PRICE ================= */}
+        {/* ================= LEFT ================= */}
         <div className="space-y-6">
           <Section title="Crop details">
             <div className="grid gap-5 md:grid-cols-2">
@@ -226,8 +248,7 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
               </div>
               <input type="hidden" name="quality_grade" value={grade} />
 
-              {/* AI status line */}
-              <AiStatusLine status={aiStatus} />
+              <AiStatusLine status={aiStatus} inputCrop={crop} />
             </div>
           </Section>
 
@@ -248,7 +269,7 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
           </Section>
         </div>
 
-        {/* ================= RIGHT: PHOTO + LOCATION ================= */}
+        {/* ================= RIGHT ================= */}
         <div className="space-y-6">
           <Section title="Photo">
             <label
@@ -332,11 +353,27 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
         </div>
       )}
 
+      {cropMismatch && (
+        <div className="rounded-xl border-2 border-[#C62828] bg-[#FFF5F5] p-4">
+          <p className="text-sm font-bold text-[#C62828]">
+            ⚠ Crop mismatch detected
+          </p>
+          <p className="mt-1 text-xs text-[#C62828]/85">
+            You entered <strong>{crop}</strong> but the AI detected{" "}
+            <strong>
+              {aiStatus.kind === "done" ? aiStatus.detectedCrop : "another crop"}
+            </strong>
+            . Please fix the crop name or upload the correct photo before
+            publishing.
+          </p>
+        </div>
+      )}
+
       <div className="flex justify-end gap-3 border-t border-[#E4EBE6] pt-6">
         <button
           type="submit"
-          disabled={isPending}
-          className="flex items-center gap-2 rounded-full bg-[#1B4D3E] px-8 py-3.5 text-sm font-medium text-white transition-transform hover:scale-[1.02] disabled:opacity-60"
+          disabled={isPending || cropMismatch}
+          className="flex items-center gap-2 rounded-full bg-[#1B4D3E] px-8 py-3.5 text-sm font-medium text-white transition-transform hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isPending ? (
             <>
@@ -353,7 +390,13 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
 
 /* ===================== AI STATUS LINE ===================== */
 
-function AiStatusLine({ status }: { status: AiStatus }) {
+function AiStatusLine({
+  status,
+  inputCrop,
+}: {
+  status: AiStatus;
+  inputCrop: string;
+}) {
   if (status.kind === "idle") return null;
 
   if (status.kind === "uploading") {
@@ -367,7 +410,7 @@ function AiStatusLine({ status }: { status: AiStatus }) {
   if (status.kind === "analyzing") {
     return (
       <p className="mt-2 flex items-center gap-1.5 text-xs text-[#6B7A74]">
-        <ButtonSpinner size={12} /> AI analyzing quality…
+        <ButtonSpinner size={12} /> AI analyzing quality & crop…
       </p>
     );
   }
@@ -375,19 +418,36 @@ function AiStatusLine({ status }: { status: AiStatus }) {
   if (status.kind === "unsupported") {
     return (
       <p className="mt-2 rounded-lg bg-[#FFF8E1] px-3 py-2 text-[11px] text-[#B26A00]">
-        ⓘ Quality AI currently supports <strong>Onion</strong> and{" "}
-        <strong>Potato</strong>. Please choose grade manually for{" "}
-        {status.crop}.
+        ⓘ Quality AI does not have a specialist model for{" "}
+        <strong>{status.crop}</strong>. Please choose grade manually.
       </p>
     );
   }
 
   if (status.kind === "done") {
-    const pct = Math.round(status.confidence * 100);
+    const gradePct = Math.round(status.confidence * 100);
+    const matchPct = Math.round(status.cropMatchConfidence * 100);
+
+    if (!status.cropMatchesInput) {
+      return (
+        <p className="mt-2 rounded-lg border border-[#FFCDD2] bg-[#FFF5F5] px-3 py-2 text-[11px] font-medium text-[#C62828]">
+          ⚠ AI detected <strong>{status.detectedCrop ?? "another crop"}</strong>{" "}
+          (not {inputCrop || "your input"}). Match confidence: {matchPct}%.
+        </p>
+      );
+    }
+
     return (
       <p className="mt-2 rounded-lg bg-[#EAF5EE] px-3 py-2 text-[11px] font-medium text-[#2E7D32]">
-        ✓ AI graded this <strong>Grade {status.grade}</strong> · {pct}%
+        ✓ AI graded <strong>Grade {status.grade}</strong> · {gradePct}%
         confidence
+        {status.detectedCrop && (
+          <>
+            {" "}
+            · Detected <strong>{status.detectedCrop}</strong> ({matchPct}%
+            match)
+          </>
+        )}
       </p>
     );
   }

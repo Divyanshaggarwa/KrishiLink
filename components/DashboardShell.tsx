@@ -58,6 +58,7 @@ const ADMIN_NAV = [
   { href: "/admin", label: "Overview" },
   { href: "/admin/verifications", label: "Verifications" },
   { href: "/admin/users", label: "Users" },
+  { href: "/admin/logistics", label: "Logistics" },
   { href: "/admin/orders", label: "Orders" },
   { href: "/admin/fpo", label: "FPO" },
   { href: "/admin/fees", label: "Fees" },

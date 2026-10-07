@@ -6,7 +6,7 @@ import { redirect } from "next/navigation";
 
 export type ListingState = { error?: string; ok?: boolean } | null;
 
-const MAX_PHOTO_BYTES = 5 * 1024 * 1024; // 5MB
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 export async function createListingAction(
@@ -30,6 +30,18 @@ export async function createListingAction(
   const qualityConf = Number(formData.get("quality_confidence")) || null;
   const photo = formData.get("photo") as File | null;
 
+  // AI-verification fields
+  const aiDetectedCrop =
+    String(formData.get("ai_detected_crop") || "").trim() || null;
+  const cropMatchConfidenceRaw = String(
+    formData.get("crop_match_confidence") || ""
+  );
+  const cropMatchConfidence =
+    cropMatchConfidenceRaw === ""
+      ? null
+      : Number(cropMatchConfidenceRaw) || null;
+  const cropMismatch = formData.get("crop_mismatch") === "true";
+
   // Validation
   if (!crop) return { error: "Crop name is required." };
   if (!quantity || quantity <= 0)
@@ -40,6 +52,13 @@ export async function createListingAction(
     return { error: "Expected price must be greater than 0." };
   if (!district) return { error: "District is required." };
   if (!state) return { error: "State is required." };
+
+  // Server-side block on AI crop mismatch
+  if (cropMismatch) {
+    return {
+      error: `The AI detected a different crop (${aiDetectedCrop ?? "unknown"}) in the photo. Please fix the crop name or upload the correct photo.`,
+    };
+  }
 
   const supabase = await createClient();
   let photoUrl: string | null = null;
@@ -88,6 +107,9 @@ export async function createListingAction(
     pincode: pincode || null,
     harvest_date: harvestDate || null,
     photo_url: photoUrl,
+    ai_detected_crop: aiDetectedCrop,
+    crop_match_confidence: cropMatchConfidence,
+    crop_mismatch: false,
     status: "active",
   });
 

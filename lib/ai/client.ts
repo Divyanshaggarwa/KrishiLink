@@ -53,33 +53,72 @@ export async function predictFairPrice(
   return ai ?? mockFairPrice(input);
 }
 
-/* -------------------- Quality (Roboflow → AI → Mock) -------------------- */
+/* -------------------- Quality (Roboflow → AI → Mock) --------------------
+   Returns grade + detectedCrop + cropMatchesInput.
+   Always compares against `input.crop` if provided.
+   -------------------------------------------------------------------- */
 export async function predictQuality(
   imageBase64: string,
   crop?: string,
   imageUrl?: string
 ): Promise<QualityOutput> {
-  /* ---- 1. Try Roboflow (only for onion/potato) ---- */
+  const inputCrop = (crop ?? "").toLowerCase().trim();
+
+  /* ---- 1. Try Roboflow (only for supported crops) ---- */
   if (crop && imageUrl && isRoboflowSupported(crop)) {
     const roboflow = await callRoboflowQuality(imageUrl);
     if (roboflow) {
+      // FIXED: was `?? inputCrop || null` — replaced with `||` chain
+      const detectedCrop: string | null =
+        roboflow.detectedCrop || inputCrop || null;
+
+      const cropMatchesInput =
+        !inputCrop || !detectedCrop
+          ? true
+          : detectedCrop.toLowerCase() === inputCrop;
+
       return {
         grade: roboflow.grade,
         confidence: roboflow.confidence,
         defects: [],
+        detectedCrop,
+        cropMatchesInput,
+        cropMatchConfidence: roboflow.confidence,
         source: "ai",
       };
     }
   }
 
   /* ---- 2. Try external FastAPI service ---- */
-  const ai = await callAI<QualityOutput>("/predict/quality", {
+  const ai = await callAI<Partial<QualityOutput>>("/predict/quality", {
     image_base64: imageBase64,
+    crop: inputCrop,
   });
-  if (ai) return ai;
+
+  if (ai && ai.grade) {
+    // FIXED: was `ai.detectedCrop ?? inputCrop || null` — replaced with `||` chain
+    const detectedCrop: string | null =
+      ai.detectedCrop || inputCrop || null;
+
+    const cropMatchesInput =
+      ai.cropMatchesInput ??
+      (!inputCrop || !detectedCrop
+        ? true
+        : detectedCrop.toLowerCase() === inputCrop);
+
+    return {
+      grade: ai.grade,
+      confidence: ai.confidence ?? 0.7,
+      defects: ai.defects ?? [],
+      detectedCrop,
+      cropMatchesInput,
+      cropMatchConfidence: ai.cropMatchConfidence ?? 0.7,
+      source: "ai",
+    };
+  }
 
   /* ---- 3. Fallback to mock ---- */
-  return mockQuality({ imageBase64 });
+  return mockQuality({ imageBase64, cropName: inputCrop });
 }
 
 /* -------------------- Demand -------------------- */

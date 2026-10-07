@@ -27,12 +27,19 @@ export interface FairPriceOutput {
 /* -------------------- Quality -------------------- */
 export interface QualityInput {
   imageBase64: string;
+  cropName?: string;
 }
 
 export interface QualityOutput {
   grade: QualityGrade;
   confidence: number;
   defects: string[];
+  /** Crop name the AI actually detected in the photo (null if unsupported). */
+  detectedCrop: string | null;
+  /** Does the detected crop match the farmer's input crop? */
+  cropMatchesInput: boolean;
+  /** AI's confidence in the crop detection (0–1). */
+  cropMatchConfidence: number;
   source: AiSource;
 }
 

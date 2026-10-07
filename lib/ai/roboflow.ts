@@ -1,5 +1,5 @@
 /* ========================================================================
-   Roboflow Quality AI — Onion & Potato → Grade A / B / C
+   Roboflow Quality AI — Onion & Potato → Grade A / B / C + detected crop
    Uses our Next.js API proxy (server-side key).
    ======================================================================== */
 
@@ -8,6 +8,7 @@ export const ROBOFLOW_SUPPORTED_CROPS = ["onion", "potato"] as const;
 export interface RoboflowQualityResult {
   grade: "A" | "B" | "C";
   confidence: number;
+  detectedCrop: string | null;
   raw: unknown;
 }
 
@@ -52,10 +53,14 @@ export async function callRoboflowQuality(
 }
 
 /**
- * Parses Roboflow Workflow responses.
- * Real shape (confirmed):
- *   { outputs: [ { predictions: { prediction_type: "classification",
- *                                 predictions: [ { class: "A", confidence: 0.91 } ] } } ] }
+ * Parses Roboflow Workflow responses. Extracts grade + crop name.
+ *
+ * Class label formats we support:
+ *   "A"            → grade A, no crop info
+ *   "onion_A"      → crop onion, grade A
+ *   "onion_A_rot"  → crop onion, grade A
+ *   "GRADE_A"      → grade A
+ *   "onion"        → crop onion, no grade
  */
 function parseRoboflowResponse(data: unknown): RoboflowQualityResult | null {
   try {
@@ -71,7 +76,7 @@ function parseRoboflowResponse(data: unknown): RoboflowQualityResult | null {
 
         if (!predsContainer) continue;
 
-        /* ---- Shape A: predictions is an OBJECT with nested .predictions[] ---- */
+        /* ---- Shape A: predictions is an OBJECT ---- */
         if (!Array.isArray(predsContainer)) {
           const nested = predsContainer.predictions as
             | Array<Record<string, unknown>>
@@ -85,20 +90,26 @@ function parseRoboflowResponse(data: unknown): RoboflowQualityResult | null {
             const conf = Number(
               top.confidence ?? predsContainer.confidence ?? 0.7
             );
-            const grade = normalizeGrade(cls);
-            if (grade) {
-              return { grade, confidence: conf, raw: data };
+            const parsed = parseClassLabel(cls);
+            if (parsed.grade || parsed.crop) {
+              return {
+                grade: parsed.grade ?? "B",
+                confidence: conf,
+                detectedCrop: parsed.crop,
+                raw: data,
+              };
             }
           }
 
-          /* Some workflows put the class at the container level */
+          /* Container-level class */
           const containerClass = String(predsContainer.top ?? "");
           if (containerClass) {
-            const grade = normalizeGrade(containerClass);
-            if (grade) {
+            const parsed = parseClassLabel(containerClass);
+            if (parsed.grade || parsed.crop) {
               return {
-                grade,
+                grade: parsed.grade ?? "B",
                 confidence: Number(predsContainer.confidence ?? 0.7),
+                detectedCrop: parsed.crop,
                 raw: data,
               };
             }
@@ -110,8 +121,15 @@ function parseRoboflowResponse(data: unknown): RoboflowQualityResult | null {
           const top = predsContainer[0];
           const cls = String(top.class ?? top.class_name ?? "");
           const conf = Number(top.confidence ?? 0.7);
-          const grade = normalizeGrade(cls);
-          if (grade) return { grade, confidence: conf, raw: data };
+          const parsed = parseClassLabel(cls);
+          if (parsed.grade || parsed.crop) {
+            return {
+              grade: parsed.grade ?? "B",
+              confidence: conf,
+              detectedCrop: parsed.crop,
+              raw: data,
+            };
+          }
         }
       }
     }
@@ -120,16 +138,26 @@ function parseRoboflowResponse(data: unknown): RoboflowQualityResult | null {
     const preds = d.predictions as Array<Record<string, unknown>> | undefined;
     if (Array.isArray(preds) && preds.length > 0) {
       const top = preds[0];
-      const grade = normalizeGrade(String(top.class ?? top.class_name ?? ""));
-      if (grade) {
-        return { grade, confidence: Number(top.confidence ?? 0.7), raw: data };
+      const parsed = parseClassLabel(String(top.class ?? top.class_name ?? ""));
+      if (parsed.grade || parsed.crop) {
+        return {
+          grade: parsed.grade ?? "B",
+          confidence: Number(top.confidence ?? 0.7),
+          detectedCrop: parsed.crop,
+          raw: data,
+        };
       }
     }
 
     if (d.class) {
-      const grade = normalizeGrade(String(d.class));
-      if (grade) {
-        return { grade, confidence: Number(d.confidence ?? 0.7), raw: data };
+      const parsed = parseClassLabel(String(d.class));
+      if (parsed.grade || parsed.crop) {
+        return {
+          grade: parsed.grade ?? "B",
+          confidence: Number(d.confidence ?? 0.7),
+          detectedCrop: parsed.crop,
+          raw: data,
+        };
       }
     }
 
@@ -141,30 +169,50 @@ function parseRoboflowResponse(data: unknown): RoboflowQualityResult | null {
   }
 }
 
-function normalizeGrade(cls: string): "A" | "B" | "C" | null {
-  const cleaned = cls.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+/* ------------------------------------------------------------------ */
 
+interface ParsedLabel {
+  grade: "A" | "B" | "C" | null;
+  crop: string | null;
+}
+
+function parseClassLabel(cls: string): ParsedLabel {
+  const cleaned = cls.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  const lower = cls.toLowerCase();
+
+  // Extract grade
+  let grade: "A" | "B" | "C" | null = null;
   if (
     cleaned === "A" ||
     cleaned === "GRADEA" ||
     cleaned.startsWith("A_") ||
     cleaned.endsWith("_A")
-  )
-    return "A";
-  if (
+  ) {
+    grade = "A";
+  } else if (
     cleaned === "B" ||
     cleaned === "GRADEB" ||
     cleaned.startsWith("B_") ||
     cleaned.endsWith("_B")
-  )
-    return "B";
-  if (
+  ) {
+    grade = "B";
+  } else if (
     cleaned === "C" ||
     cleaned === "GRADEC" ||
     cleaned.startsWith("C_") ||
     cleaned.endsWith("_C")
-  )
-    return "C";
+  ) {
+    grade = "C";
+  }
 
-  return null;
+  // Extract crop
+  let crop: string | null = null;
+  for (const c of ROBOFLOW_SUPPORTED_CROPS) {
+    if (lower.includes(c)) {
+      crop = c;
+      break;
+    }
+  }
+
+  return { grade, crop };
 }

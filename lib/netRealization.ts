@@ -1,86 +1,238 @@
 /* ========================================================================
-   KrishiLink — Net Realization Engine
-   Core formula: NET = PRICE − LOGISTICS − TRANSACTION − QUALITY_DEDUCTION
-   Pure functions. No side effects. Testable. Judges love this file.
+   KrishiLink — Net Realization Engine (v2)
+
+   Two calculations:
+   1. FARMER net realization — what farmer receives per kg
+        NET = price − farmer_fee − gateway_fee − handling − quality_deduction
+        (transport is NO LONGER subtracted — buyer bears it)
+
+   2. BUYER landed cost — what buyer actually pays per kg
+        LANDED = price + buyer_fee + gateway_fee + transport_cost
+        (used on the buyer dashboard to find the best deal)
    ======================================================================== */
 
 export type QualityGrade = "A" | "B" | "C";
 
-export const TRANSACTION_COST_PER_KG = 0.3;
+export const DEFAULT_TRANSACTION_COST_PER_KG = 0.3; // legacy fallback
+
+/* ================================================================
+   FEE CONFIG
+   ================================================================ */
+
+export interface FeeConfig {
+  farmer_fee_pct: number;         // % deducted from farmer's proceeds
+  buyer_fee_pct: number;          // % added to buyer's payable
+  transporter_fee_pct: number;    // % of transport cost (platform's cut)
+  handling_per_kg: number;        // ₹/kg handling (farmer side)
+  gateway_pct: number;
+  quality_deduction_A: number;
+  quality_deduction_B: number;
+  quality_deduction_C: number;
+}
+
+export const DEFAULT_FEE_CONFIG: FeeConfig = {
+  farmer_fee_pct: 2.0,
+  buyer_fee_pct: 1.0,
+  transporter_fee_pct: 5.0,
+  handling_per_kg: 0.2,
+  gateway_pct: 1.8,
+  quality_deduction_A: 0,
+  quality_deduction_B: 0.5,
+  quality_deduction_C: 1.5,
+};
+
+/* ================================================================
+   TRANSPORT RATES
+   ================================================================ */
+
+export interface TransportRate {
+  vehicle: string;
+  rate_per_km: number;
+  min_weight_kg: number;
+  max_weight_kg: number;
+}
+
+export const DEFAULT_TRANSPORT_RATES: TransportRate[] = [
+  { vehicle: "Tempo", rate_per_km: 18, min_weight_kg: 0, max_weight_kg: 500 },
+  {
+    vehicle: "Mini Truck",
+    rate_per_km: 28,
+    min_weight_kg: 500,
+    max_weight_kg: 2000,
+  },
+  {
+    vehicle: "Truck",
+    rate_per_km: 42,
+    min_weight_kg: 2000,
+    max_weight_kg: 99999,
+  },
+];
+
+export function pickVehicle(
+  quantityKg: number,
+  rates: TransportRate[] = DEFAULT_TRANSPORT_RATES
+): TransportRate {
+  const match = rates.find(
+    (r) => quantityKg >= r.min_weight_kg && quantityKg <= r.max_weight_kg
+  );
+  return match ?? rates[rates.length - 1];
+}
+
+/* ================================================================
+   QUALITY DEDUCTION
+   ================================================================ */
+
+export function getQualityDeduction(
+  grade: QualityGrade,
+  fees: FeeConfig = DEFAULT_FEE_CONFIG
+): number {
+  if (grade === "A") return fees.quality_deduction_A;
+  if (grade === "B") return fees.quality_deduction_B;
+  return fees.quality_deduction_C;
+}
+
+/* ================================================================
+   FARMER SIDE — net realization (NO transport deduction)
+   ================================================================ */
 
 export interface OfferInput {
+  pricePerKg: number;
+  quantityKg: number;
+  distanceKm?: number; // kept optional for backward compat — not used in math
+}
+
+export interface NetRealizationBreakdown {
+  pricePerKg: number;
+  farmerFeePerKg: number;
+  gatewayFeePerKg: number;
+  handlingPerKg: number;
+  qualityDeduction: number;
+  netRealizationPerKg: number;
+  grossAmount: number;
+  netAmount: number;
+  totalDeductionsAmount: number;
+  distanceKm: number;
+  // Backward-compat fields (kept so old pages don't crash):
+  transportCostPerKg: number;      // always 0 now
+  transactionCostPerKg: number;    // legacy — kept as 0
+}
+
+export function calculateNetRealization(
+  offer: OfferInput,
+  grade: QualityGrade,
+  fees: FeeConfig = DEFAULT_FEE_CONFIG
+): NetRealizationBreakdown {
+  const farmerFeePerKg = (fees.farmer_fee_pct / 100) * offer.pricePerKg;
+  const gatewayFeePerKg = (fees.gateway_pct / 100) * offer.pricePerKg;
+  const handlingPerKg = fees.handling_per_kg;
+  const qualityDeduction = getQualityDeduction(grade, fees);
+
+  const netPerKg =
+    offer.pricePerKg -
+    farmerFeePerKg -
+    gatewayFeePerKg -
+    handlingPerKg -
+    qualityDeduction;
+
+  const grossAmount = offer.pricePerKg * offer.quantityKg;
+  const netAmount = netPerKg * offer.quantityKg;
+  const totalDeductionsPerKg =
+    farmerFeePerKg + gatewayFeePerKg + handlingPerKg + qualityDeduction;
+
+  return {
+    pricePerKg: round2(offer.pricePerKg),
+    farmerFeePerKg: round2(farmerFeePerKg),
+    gatewayFeePerKg: round2(gatewayFeePerKg),
+    handlingPerKg: round2(handlingPerKg),
+    qualityDeduction: round2(qualityDeduction),
+    netRealizationPerKg: round2(netPerKg),
+    grossAmount: round2(grossAmount),
+    netAmount: round2(netAmount),
+    totalDeductionsAmount: round2(totalDeductionsPerKg * offer.quantityKg),
+    distanceKm: round2(offer.distanceKm ?? 0),
+    // Backward-compat
+    transportCostPerKg: 0,
+    transactionCostPerKg: 0,
+  };
+}
+
+/* ================================================================
+   BUYER SIDE — landed cost (INCLUDES transport)
+   ================================================================ */
+
+export interface BuyerLandedInput {
   pricePerKg: number;
   quantityKg: number;
   distanceKm: number;
 }
 
-export interface NetRealizationBreakdown {
+export interface BuyerLandedBreakdown {
   pricePerKg: number;
-  transportCostPerKg: number;
-  transactionCostPerKg: number;
-  qualityDeduction: number;
-  netRealizationPerKg: number;
+  buyerFeePerKg: number;
+  gatewayFeePerKg: number;
+  transportPerKg: number;
+  landedPerKg: number;
   grossAmount: number;
-  netAmount: number;
+  totalPayable: number;
+  vehicle: string;
   distanceKm: number;
 }
 
-/** Transport cost model — matches what the AI microservice returns.
- *  If the AI service is available, we prefer its value; this is the fallback. */
+export function calculateBuyerLandedCost(
+  input: BuyerLandedInput,
+  fees: FeeConfig = DEFAULT_FEE_CONFIG,
+  transportRates: TransportRate[] = DEFAULT_TRANSPORT_RATES
+): BuyerLandedBreakdown {
+  const buyerFeePerKg = (fees.buyer_fee_pct / 100) * input.pricePerKg;
+  const gatewayFeePerKg = (fees.gateway_pct / 100) * input.pricePerKg;
+
+  const vehicle = pickVehicle(input.quantityKg, transportRates);
+  const transportTotal = input.distanceKm * vehicle.rate_per_km;
+  const transportPerKg =
+    input.quantityKg > 0 ? transportTotal / input.quantityKg : 0;
+
+  const landedPerKg =
+    input.pricePerKg + buyerFeePerKg + gatewayFeePerKg + transportPerKg;
+
+  const grossAmount = input.pricePerKg * input.quantityKg;
+  const totalPayable = landedPerKg * input.quantityKg;
+
+  return {
+    pricePerKg: round2(input.pricePerKg),
+    buyerFeePerKg: round2(buyerFeePerKg),
+    gatewayFeePerKg: round2(gatewayFeePerKg),
+    transportPerKg: round2(transportPerKg),
+    landedPerKg: round2(landedPerKg),
+    grossAmount: round2(grossAmount),
+    totalPayable: round2(totalPayable),
+    vehicle: vehicle.vehicle,
+    distanceKm: round2(input.distanceKm),
+  };
+}
+
+/* ================================================================
+   LEGACY EXPORTS (kept so existing imports don't break)
+   ================================================================ */
+
+export const TRANSACTION_COST_PER_KG = DEFAULT_TRANSACTION_COST_PER_KG;
+
+export type TransportMode = "krishilink" | "self";
+
+/** @deprecated — no longer subtracted from farmer's realization.
+ *  Kept only for buyer-side transport estimate. */
 export function estimateTransportCostPerKg(
   distanceKm: number,
   quantityKg: number
 ): number {
   if (distanceKm <= 0 || quantityKg <= 0) return 0;
-
-  // Vehicle rate per km based on load
-  let ratePerKm: number;
-  if (quantityKg < 500) ratePerKm = 18; // tempo
-  else if (quantityKg < 2000) ratePerKm = 28; // mini truck
-  else ratePerKm = 42; // truck
-
-  const total = distanceKm * ratePerKm;
-  return Number((total / quantityKg).toFixed(2));
+  const vehicle = pickVehicle(quantityKg);
+  return round2((distanceKm * vehicle.rate_per_km) / quantityKg);
 }
 
-export function getQualityDeduction(grade: QualityGrade): number {
-  return { A: 0, B: 0.5, C: 1.5 }[grade] ?? 0;
-}
+/* ================================================================
+   DISTANCE HELPERS (unchanged)
+   ================================================================ */
 
-export type TransportMode = "krishilink" | "self";
-
-export function calculateNetRealization(
-  offer: OfferInput,
-  grade: QualityGrade,
-  transportMode: TransportMode = "krishilink"
-): NetRealizationBreakdown {
-  // If farmer uses own vehicle → no transport cost deducted
-  const transportCostPerKg =
-    transportMode === "self"
-      ? 0
-      : estimateTransportCostPerKg(offer.distanceKm, offer.quantityKg);
-
-  const transactionCostPerKg = TRANSACTION_COST_PER_KG;
-  const qualityDeduction = getQualityDeduction(grade);
-
-  const netPerKg =
-    offer.pricePerKg -
-    transportCostPerKg -
-    transactionCostPerKg -
-    qualityDeduction;
-
-  return {
-    pricePerKg: Number(offer.pricePerKg.toFixed(2)),
-    transportCostPerKg,
-    transactionCostPerKg,
-    qualityDeduction,
-    netRealizationPerKg: Number(netPerKg.toFixed(2)),
-    grossAmount: Number((offer.pricePerKg * offer.quantityKg).toFixed(2)),
-    netAmount: Number((netPerKg * offer.quantityKg).toFixed(2)),
-    distanceKm: Number(offer.distanceKm.toFixed(2)),
-  };
-}
-/** Great-circle distance between two lat/lng points */
 export function haversineKm(
   lat1: number,
   lng1: number,
@@ -98,12 +250,6 @@ export function haversineKm(
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-/* ------------------------------------------------------------------------
-   Prototype distance estimate when we don't have lat/lng yet.
-   Same district → 25 km
-   Same state, different district → 90 km
-   Different state → 300 km
-   ------------------------------------------------------------------------ */
 export function estimateDistanceFromDistricts(
   farmerDistrict: string | null,
   farmerState: string | null,
@@ -111,16 +257,21 @@ export function estimateDistanceFromDistricts(
   buyerState: string | null
 ): number {
   if (!farmerDistrict || !buyerDistrict) return 100;
-
   const sameState =
     !!farmerState &&
     !!buyerState &&
     farmerState.toLowerCase() === buyerState.toLowerCase();
-
   const sameDistrict =
     farmerDistrict.toLowerCase() === buyerDistrict.toLowerCase();
-
   if (sameState && sameDistrict) return 25;
   if (sameState) return 90;
   return 300;
+}
+
+/* ================================================================
+   UTILITY
+   ================================================================ */
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }

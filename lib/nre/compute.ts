@@ -1,13 +1,18 @@
 /* ========================================================================
-   KrishiLink — Net Realization Engine (NRE)
-   Pure functions. Fee-config aware. Testable. The single source of truth.
+   KrishiLink Net Realization Engine — v2
+   - Farmer's net EXCLUDES transport (buyer bears transport)
+   - Buyer's landed cost INCLUDES transport + buyer fee
+   - Dual-sided platform fee (farmer_fee_pct + buyer_fee_pct)
+   - Transporter fee charged on transport revenue
    ======================================================================== */
 
 export type QualityGrade = "A" | "B" | "C";
 
 export interface FeeConfig {
-  commission_pct: number;
-  handling_flat: number;
+  farmer_fee_pct: number;       // % deducted from farmer's proceeds
+  buyer_fee_pct: number;        // % added to buyer's payable
+  transporter_fee_pct: number;  // % of transport cost (charged to transporter)
+  handling_per_kg: number;      // ₹/kg handling (farmer side)
   gateway_pct: number;
   quality_deduction_A: number;
   quality_deduction_B: number;
@@ -21,64 +26,34 @@ export interface TransportRate {
   max_weight_kg: number;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Farmer-side realization                                          */
+/* ------------------------------------------------------------------ */
+
 export interface RealizationInput {
   offerPricePerKg: number;
   quantityKg: number;
-  distanceKm: number;
   grade: QualityGrade;
   feeConfig: FeeConfig;
-  transportRates: TransportRate[];
 }
 
 export interface RealizationBreakdown {
   gross: number;
-  commission: number;
+  farmerFee: number;
   gatewayFee: number;
   handling: number;
-  transportCost: number;
   qualityDeduction: number;
   totalDeductions: number;
   netRealization: number;
   netPerKg: number;
   breakdownPerKg: {
     pricePerKg: number;
-    commissionPerKg: number;
+    farmerFeePerKg: number;
     gatewayPerKg: number;
     handlingPerKg: number;
-    transportPerKg: number;
     qualityPerKg: number;
     netPerKg: number;
   };
-  vehicle: string;
-}
-
-export interface MandiBenchmarkInput {
-  mandiModalPricePerKg: number;
-  quantityKg: number;
-  distanceToMandiKm: number;
-  transportRates: TransportRate[];
-  mandiCommissionPct: number;  // typically 6-8% in APMCs
-  spoilagePct: number;         // 2-5% typical wastage
-}
-
-export interface MandiBenchmark {
-  grossAtMandi: number;
-  mandiCommission: number;
-  transportToMandi: number;
-  spoilageLoss: number;
-  mandiNet: number;
-  mandiNetPerKg: number;
-}
-
-/* -------------------------------------------------------------------- */
-export function pickVehicle(
-  quantityKg: number,
-  rates: TransportRate[]
-): TransportRate {
-  const match = rates.find(
-    (r) => quantityKg >= r.min_weight_kg && quantityKg <= r.max_weight_kg
-  );
-  return match ?? rates[rates.length - 1];
 }
 
 export function qualityDeductionFor(
@@ -93,46 +68,131 @@ export function qualityDeductionFor(
 export function computeRealization(
   input: RealizationInput
 ): RealizationBreakdown {
-  const { offerPricePerKg, quantityKg, distanceKm, grade, feeConfig, transportRates } = input;
+  const { offerPricePerKg, quantityKg, grade, feeConfig } = input;
 
   const gross = offerPricePerKg * quantityKg;
-  const commission = gross * (feeConfig.commission_pct / 100);
+  const farmerFee = gross * (feeConfig.farmer_fee_pct / 100);
   const gatewayFee = gross * (feeConfig.gateway_pct / 100);
-  const handling = feeConfig.handling_flat;
+  const handling = feeConfig.handling_per_kg * quantityKg;
+  const qualityDeduction = qualityDeductionFor(grade, feeConfig) * quantityKg;
 
-  const vehicle = pickVehicle(quantityKg, transportRates);
-  const transportCost = distanceKm * vehicle.rate_per_km;
-
-  const qualityDeduction =
-    qualityDeductionFor(grade, feeConfig) * quantityKg;
-
-  const totalDeductions =
-    commission + gatewayFee + handling + transportCost + qualityDeduction;
-
+  const totalDeductions = farmerFee + gatewayFee + handling + qualityDeduction;
   const netRealization = gross - totalDeductions;
   const netPerKg = quantityKg > 0 ? netRealization / quantityKg : 0;
 
   return {
     gross: round2(gross),
-    commission: round2(commission),
+    farmerFee: round2(farmerFee),
     gatewayFee: round2(gatewayFee),
     handling: round2(handling),
-    transportCost: round2(transportCost),
     qualityDeduction: round2(qualityDeduction),
     totalDeductions: round2(totalDeductions),
     netRealization: round2(netRealization),
     netPerKg: round2(netPerKg),
     breakdownPerKg: {
       pricePerKg: round2(offerPricePerKg),
-      commissionPerKg: round2(commission / quantityKg),
+      farmerFeePerKg: round2(farmerFee / quantityKg),
       gatewayPerKg: round2(gatewayFee / quantityKg),
       handlingPerKg: round2(handling / quantityKg),
-      transportPerKg: round2(transportCost / quantityKg),
       qualityPerKg: round2(qualityDeduction / quantityKg),
       netPerKg: round2(netPerKg),
     },
-    vehicle: vehicle.vehicle,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Buyer-side landed cost                                           */
+/* ------------------------------------------------------------------ */
+
+export interface BuyerLandedInput {
+  offerPricePerKg: number;
+  quantityKg: number;
+  distanceKm: number;
+  feeConfig: FeeConfig;
+  transportRates: TransportRate[];
+}
+
+export interface BuyerLandedBreakdown {
+  gross: number;
+  buyerFee: number;
+  gatewayFee: number;
+  transportCost: number;
+  totalPayable: number;
+  landedPerKg: number;
+  vehicle: string;
+  breakdownPerKg: {
+    pricePerKg: number;
+    buyerFeePerKg: number;
+    gatewayPerKg: number;
+    transportPerKg: number;
+    landedPerKg: number;
+  };
+}
+
+export function pickVehicle(
+  quantityKg: number,
+  rates: TransportRate[]
+): TransportRate {
+  const match = rates.find(
+    (r) => quantityKg >= r.min_weight_kg && quantityKg <= r.max_weight_kg
+  );
+  return match ?? rates[rates.length - 1];
+}
+
+export function computeBuyerLandedCost(
+  input: BuyerLandedInput
+): BuyerLandedBreakdown {
+  const { offerPricePerKg, quantityKg, distanceKm, feeConfig, transportRates } =
+    input;
+
+  const gross = offerPricePerKg * quantityKg;
+  const buyerFee = gross * (feeConfig.buyer_fee_pct / 100);
+  const gatewayFee = gross * (feeConfig.gateway_pct / 100);
+
+  const vehicle = pickVehicle(quantityKg, transportRates);
+  const transportCost = distanceKm * vehicle.rate_per_km;
+
+  const totalPayable = gross + buyerFee + gatewayFee + transportCost;
+  const landedPerKg = quantityKg > 0 ? totalPayable / quantityKg : 0;
+
+  return {
+    gross: round2(gross),
+    buyerFee: round2(buyerFee),
+    gatewayFee: round2(gatewayFee),
+    transportCost: round2(transportCost),
+    totalPayable: round2(totalPayable),
+    landedPerKg: round2(landedPerKg),
+    vehicle: vehicle.vehicle,
+    breakdownPerKg: {
+      pricePerKg: round2(offerPricePerKg),
+      buyerFeePerKg: round2(buyerFee / quantityKg),
+      gatewayPerKg: round2(gatewayFee / quantityKg),
+      transportPerKg: round2(transportCost / quantityKg),
+      landedPerKg: round2(landedPerKg),
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Mandi benchmark (unchanged — farmer's alternative)                */
+/* ------------------------------------------------------------------ */
+
+export interface MandiBenchmarkInput {
+  mandiModalPricePerKg: number;
+  quantityKg: number;
+  distanceToMandiKm: number;
+  transportRates: TransportRate[];
+  mandiCommissionPct: number;
+  spoilagePct: number;
+}
+
+export interface MandiBenchmark {
+  grossAtMandi: number;
+  mandiCommission: number;
+  transportToMandi: number;
+  spoilageLoss: number;
+  mandiNet: number;
+  mandiNetPerKg: number;
 }
 
 export function computeMandiBenchmark(
@@ -163,6 +223,40 @@ export function computeMandiBenchmark(
     mandiNet: round2(mandiNet),
     mandiNetPerKg: round2(quantityKg > 0 ? mandiNet / quantityKg : 0),
   };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                          */
+/* ------------------------------------------------------------------ */
+
+export function estimateTransportCostPerKg(
+  distanceKm: number,
+  quantityKg: number
+): number {
+  if (distanceKm <= 0 || quantityKg <= 0) return 0;
+  let ratePerKm: number;
+  if (quantityKg < 500) ratePerKm = 18;
+  else if (quantityKg < 2000) ratePerKm = 28;
+  else ratePerKm = 42;
+  return Number(((distanceKm * ratePerKm) / quantityKg).toFixed(2));
+}
+
+export function estimateDistanceFromDistricts(
+  farmerDistrict: string | null,
+  farmerState: string | null,
+  buyerDistrict: string | null,
+  buyerState: string | null
+): number {
+  if (!farmerDistrict || !buyerDistrict) return 100;
+  const sameState =
+    !!farmerState &&
+    !!buyerState &&
+    farmerState.toLowerCase() === buyerState.toLowerCase();
+  const sameDistrict =
+    farmerDistrict.toLowerCase() === buyerDistrict.toLowerCase();
+  if (sameState && sameDistrict) return 25;
+  if (sameState) return 90;
+  return 300;
 }
 
 function round2(n: number): number {

@@ -45,13 +45,28 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Listing not found" }, { status: 404 });
   }
 
-  // Distance: farmer district → buyer district (or buyer's home district)
-  const distanceKm = estimateDistanceFromDistricts(
-    listing.district,
-    listing.state,
-    profile.district ?? null,
-    profile.state ?? null
-  );
+  // Distance: farmer district → buyer district (real OSRM with cache)
+  const { getRealDistanceForNre } = await import("@/lib/route-ai/server");
+  let distanceKm: number;
+  try {
+    distanceKm = await getRealDistanceForNre(
+      listing.district,
+      listing.state,
+      null,
+      listing.farmer_id,
+      profile.district ?? null,
+      profile.state ?? null,
+      null,
+      profile.id
+    );
+  } catch {
+    distanceKm = estimateDistanceFromDistricts(
+      listing.district,
+      listing.state,
+      profile.district ?? null,
+      profile.state ?? null
+    );
+  }
 
   const [feeConfig, transportRates, mandi] = await Promise.all([
     loadFeeConfig(),

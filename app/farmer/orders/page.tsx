@@ -137,8 +137,17 @@ export default async function FarmerOrdersPage() {
                   />
                 </div>
 
-                                <div className="mt-5">
+                <div className="mt-5">
                   <Timeline status={o.status} createdAt={o.created_at} />
+                </div>
+
+                <div className="mt-4 flex justify-end">
+                  <Link
+                    href={`/orders/${o.id}`}
+                    className="rounded-full border border-[#1B4D3E] bg-white px-4 py-2 text-xs font-semibold text-[#1B4D3E] transition-colors hover:bg-[#EAF5EE]"
+                  >
+                    View delivery route →
+                  </Link>
                 </div>
 
                                 {o.status === "escrow_paid" && (

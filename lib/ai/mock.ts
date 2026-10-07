@@ -21,6 +21,12 @@ const CROP_BASE: Record<string, number> = {
 
 const QUALITY_MULT: Record<QualityGrade, number> = { A: 1.0, B: 0.85, C: 0.7 };
 
+/* Crops we can plausibly "detect" in the mock classifier */
+const DETECTABLE_CROPS = [
+  "onion", "potato", "tomato", "wheat", "rice",
+  "maize", "chilli", "brinjal", "okra", "cauliflower",
+];
+
 /* -------------------- Fair Price -------------------- */
 export function mockFairPrice(input: FairPriceInput): FairPriceOutput {
   const base = CROP_BASE[input.crop.toLowerCase().trim()] ?? 25;
@@ -52,8 +58,11 @@ function seasonalityMult(month: number): number {
   return harvestMonths[month] ?? 1.0;
 }
 
-/* -------------------- Quality (deterministic mock) -------------------- */
-export function mockQuality(input: { imageBase64: string }): QualityOutput {
+/* -------------------- Quality (with crop verification) -------------------- */
+export function mockQuality(input: {
+  imageBase64: string;
+  cropName?: string;
+}): QualityOutput {
   /* Hash the image to produce a stable grade */
   let hash = 0;
   const src = input.imageBase64;
@@ -69,10 +78,38 @@ export function mockQuality(input: { imageBase64: string }): QualityOutput {
         ? ["Minor surface blemish detected"]
         : ["Visible discoloration", "Surface damage"];
 
+  const confidence = Number((0.68 + (hash % 27) / 100).toFixed(2));
+
+  /* -------------------- Crop verification -------------------- */
+  const inputCrop = (input.cropName ?? "").toLowerCase().trim();
+
+  let detectedCrop: string | null = null;
+  if (inputCrop) {
+    // 90% match the input crop, 10% mismatch (simulates a wrong photo upload)
+    if (hash % 10 !== 0) {
+      detectedCrop = inputCrop;
+    } else {
+      const others = DETECTABLE_CROPS.filter((c) => c !== inputCrop);
+      detectedCrop = others[hash % others.length] ?? "onion";
+    }
+  }
+
+  const cropMatchesInput =
+    !inputCrop || !detectedCrop
+      ? true
+      : detectedCrop === inputCrop;
+
+  const cropMatchConfidence = Number(
+    (0.7 + (hash % 28) / 100).toFixed(2)
+  );
+
   return {
     grade,
-    confidence: Number((0.68 + (hash % 27) / 100).toFixed(2)),
+    confidence,
     defects,
+    detectedCrop,
+    cropMatchesInput,
+    cropMatchConfidence,
     source: "mock",
   };
 }
@@ -81,7 +118,11 @@ export function mockQuality(input: { imageBase64: string }): QualityOutput {
 export function mockDemand(input: DemandInput): DemandOutput {
   const base = 0.6 + ((input.month + input.crop.length) % 4) * 0.1;
   const trend: DemandOutput["trend"] =
-    input.month >= 8 && input.month <= 11 ? "rising" : input.month >= 3 && input.month <= 6 ? "falling" : "stable";
+    input.month >= 8 && input.month <= 11
+      ? "rising"
+      : input.month >= 3 && input.month <= 6
+        ? "falling"
+        : "stable";
 
   return {
     demandIndex: Number(base.toFixed(2)),
@@ -117,7 +158,9 @@ export function mockRoute(input: RouteInput): RouteOutput {
 
   return {
     distanceKm: Number(distanceKm.toFixed(2)),
-    costPerKg: Number(((distanceKm * ratePerKm) / Math.max(input.weightKg, 1)).toFixed(2)),
+    costPerKg: Number(
+      ((distanceKm * ratePerKm) / Math.max(input.weightKg, 1)).toFixed(2)
+    ),
     vehicle,
     etaMin: Math.round((distanceKm / 35) * 60),
     source: "mock",
@@ -127,7 +170,10 @@ export function mockRoute(input: RouteInput): RouteOutput {
 /* -------------------- Fairness -------------------- */
 export function mockFairness(input: FairnessInput): FairnessOutput {
   const anchor =
-    (input.farmerExpectedPrice + input.buyerBid + (CROP_BASE[input.crop.toLowerCase()] ?? 25)) / 3;
+    (input.farmerExpectedPrice +
+      input.buyerBid +
+      (CROP_BASE[input.crop.toLowerCase()] ?? 25)) /
+    3;
   const mid = anchor * QUALITY_MULT[input.quality];
   const low = Number((mid - 1.5).toFixed(2));
   const high = Number((mid + 1.5).toFixed(2));
@@ -137,13 +183,21 @@ export function mockFairness(input: FairnessInput): FairnessOutput {
 
   const suggestions: string[] = [];
   if (farmerVerdict === "above_fair")
-    suggestions.push(`Farmer's ask is ₹${(input.farmerExpectedPrice - high).toFixed(2)}/kg above the fair band`);
+    suggestions.push(
+      `Farmer's ask is ₹${(input.farmerExpectedPrice - high).toFixed(2)}/kg above the fair band`
+    );
   if (farmerVerdict === "below_fair")
-    suggestions.push(`Farmer could ask ₹${(low - input.farmerExpectedPrice).toFixed(2)}/kg higher`);
+    suggestions.push(
+      `Farmer could ask ₹${(low - input.farmerExpectedPrice).toFixed(2)}/kg higher`
+    );
   if (buyerVerdict === "above_fair")
-    suggestions.push(`Buyer's bid is above the fair band — counter-offer likely to work`);
+    suggestions.push(
+      `Buyer's bid is above the fair band — counter-offer likely to work`
+    );
   if (buyerVerdict === "below_fair")
-    suggestions.push(`Buyer needs to raise by ₹${(low - input.buyerBid).toFixed(2)}/kg`);
+    suggestions.push(
+      `Buyer needs to raise by ₹${(low - input.buyerBid).toFixed(2)}/kg`
+    );
 
   return {
     fairLow: low,

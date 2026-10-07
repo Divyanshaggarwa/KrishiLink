@@ -11,8 +11,10 @@ export async function loadFeeConfig(): Promise<FeeConfig> {
   const map = new Map((data || []).map((r) => [r.key, Number(r.value)]));
 
   return {
-    commission_pct: map.get("commission_pct") ?? 2.0,
-    handling_flat: map.get("handling_flat") ?? 150,
+    farmer_fee_pct: map.get("farmer_fee_pct") ?? map.get("commission_pct") ?? 2.0,
+    buyer_fee_pct: map.get("buyer_fee_pct") ?? 1.0,
+    transporter_fee_pct: map.get("transporter_fee_pct") ?? 5.0,
+    handling_per_kg: map.get("handling_per_kg") ?? 0.2,
     gateway_pct: map.get("gateway_pct") ?? 1.8,
     quality_deduction_A: map.get("quality_deduction_A") ?? 0,
     quality_deduction_B: map.get("quality_deduction_B") ?? 0.5,
