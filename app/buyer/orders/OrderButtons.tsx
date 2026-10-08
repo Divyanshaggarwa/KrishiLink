@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   payEscrowFromWallet,
   confirmDeliveryFromWallet,
@@ -26,17 +27,21 @@ export function PayEscrowButton({
   >(payEscrowFromWallet, INITIAL);
 
   const [done, setDone] = useState(false);
+  const router = useRouter();
 
   useEffect(() => {
-    if (state.ok) setDone(true);
-  }, [state.ok]);
+    if (state.ok) {
+      setDone(true);
+      router.refresh();
+    }
+  }, [state.ok, router]);
 
   const insufficient = buyerBalance < amount;
 
   if (done) {
     return (
       <div className="rounded-xl bg-[#EAF5EE] px-4 py-3 text-sm font-medium text-[#2E7D32]">
-        ✓ Escrow paid — awaiting shipment
+        ✓ 30% advance paid — awaiting shipment
       </div>
     );
   }
@@ -104,10 +109,14 @@ export function ConfirmDeliveryButton({
   >(confirmDeliveryFromWallet, INITIAL);
 
   const [done, setDone] = useState(false);
+  const router = useRouter();
 
   useEffect(() => {
-    if (state.ok) setDone(true);
-  }, [state.ok]);
+    if (state.ok) {
+      setDone(true);
+      router.refresh();
+    }
+  }, [state.ok, router]);
 
   const insufficient = buyerBalance < finalAmount;
 

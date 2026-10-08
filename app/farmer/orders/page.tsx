@@ -2,28 +2,30 @@ export const dynamic = "force-dynamic";
 
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { dedupeOrders } from "@/lib/orders/dedupe";
 import DashboardShell from "@/components/DashboardShell";
 import Timeline from "@/components/orders/Timeline";
 
 export default async function FarmerOrdersPage() {
   const profile = await requireRole(["farmer"]);
-  const supabase = await createClient();
+  const admin = createAdminClient();
 
-  const { data: orders } = await supabase
+  const { data: orders, error: ordersError } = await admin
     .from("transactions")
     .select(
       "id, listing_id, offer_id, buyer_id, final_price_per_kg, quantity_kg, net_realization_per_kg, net_amount, gross_amount, logistics_cost_per_kg, transport_cost_total, transport_mode, transaction_cost_per_kg, distance_km, vehicle_type, status, created_at"
     )
     .eq("farmer_id", profile.id)
     .order("created_at", { ascending: false });
+  if (ordersError) throw new Error(`Could not load your orders: ${ordersError.message}`);
 
-  const safeOrders = orders || [];
+  const { orders: safeOrders, duplicateCount } = dedupeOrders(orders || []);
 
   const listingIds = Array.from(new Set(safeOrders.map((o) => o.listing_id)));
   const { data: listings } =
     listingIds.length > 0
-      ? await supabase
+      ? await admin
           .from("listings")
           .select("id, crop, quality_grade")
           .in("id", listingIds)
@@ -33,7 +35,7 @@ export default async function FarmerOrdersPage() {
   const buyerIds = Array.from(new Set(safeOrders.map((o) => o.buyer_id)));
   const { data: buyers } =
     buyerIds.length > 0
-      ? await supabase
+      ? await admin
           .from("public_profiles")
           .select("id, full_name, district, state, trust_score, business_name")
           .in("id", buyerIds)
@@ -64,6 +66,18 @@ export default async function FarmerOrdersPage() {
           accent="green"
         />
       </div>
+
+      {duplicateCount > 0 && (
+        <div
+          role="status"
+          className="mt-6 rounded-xl border border-[#FFE082] bg-[#FFF8E1] p-4 text-xs text-[#8A5A00]"
+        >
+          {duplicateCount} duplicate order{" "}
+          {duplicateCount === 1 ? "record was" : "records were"} found and
+          consolidated for display. Contact support to reconcile the related
+          payments.
+        </div>
+      )}
 
       <div className="mt-10 space-y-6">
         {safeOrders.length === 0 ? (
@@ -162,15 +176,32 @@ export default async function FarmerOrdersPage() {
                   </Link>
                 </div>
 
-                                {o.status === "escrow_paid" && (
+                {o.status === "escrow_pending" && (
                   <div className="mt-5 border-t border-[#E4EBE6] pt-5 text-xs text-[#6B7A74]">
-                    KrishiLink logistics will pick up your produce shortly.
+                    Deal accepted. Waiting for the buyer to confirm by paying
+                    the 30% advance.
+                  </div>
+                )}
+
+                {o.status === "escrow_paid" && (
+                  <div className="mt-5 border-t border-[#E4EBE6] pt-5 text-xs text-[#6B7A74]">
+                    Your 30% advance is available in your wallet.{" "}
+                    {o.transport_mode === "krishilink"
+                      ? "KrishiLink logistics will pick up your produce shortly."
+                      : "The order is ready for delivery."}
                   </div>
                 )}
 
                 {o.status === "in_transit" && (
                   <div className="mt-5 border-t border-[#E4EBE6] pt-5 text-xs text-[#6B7A74]">
                     Your produce is on the way.
+                  </div>
+                )}
+
+                {o.status === "delivered" && (
+                  <div className="mt-5 border-t border-[#E4EBE6] pt-5 text-xs text-[#6B7A74]">
+                    Delivery is marked complete. Waiting for the buyer to
+                    confirm receipt and pay the remaining balance.
                   </div>
                 )}
               </div>

@@ -33,6 +33,52 @@ async function getPlatformAdminId(
   return data?.id ?? null;
 }
 
+async function getAdvanceWalletState(
+  admin: SupabaseClient,
+  orderId: string,
+  accountId: string,
+  isFpo: boolean
+): Promise<{
+  hasAvailableAdvance: boolean;
+  lockedAdvance: number;
+  error?: string;
+}> {
+  let query = admin
+    .from("wallet_transactions")
+    .select("kind, amount")
+    .eq("reference_id", orderId)
+    .in("kind", ["advance_received", "pool_advance_received", "escrow_locked"]);
+
+  query = isFpo
+    ? query.eq("fpo_id", accountId).eq("wallet_type", "fpo")
+    : query.eq("user_id", accountId);
+
+  const { data, error } = await query;
+  if (error) {
+    return {
+      hasAvailableAdvance: false,
+      lockedAdvance: 0,
+      error: `Could not check prior advance payments: ${error.message}`,
+    };
+  }
+
+  const hasAvailableAdvance = (data ?? []).some((entry) =>
+    ["advance_received", "pool_advance_received"].includes(entry.kind)
+  );
+  const lockedAdvance = (data ?? [])
+    .filter((entry) => entry.kind === "escrow_locked")
+    .reduce((total, entry) => total + Number(entry.amount), 0);
+
+  if (!Number.isFinite(lockedAdvance) || lockedAdvance < 0) {
+    return {
+      hasAvailableAdvance,
+      lockedAdvance: 0,
+      error: "Could not read the order's previous wallet advance.",
+    };
+  }
+  return { hasAvailableAdvance, lockedAdvance };
+}
+
 /* ------------------------------------------------------------------ */
 /*  Compute full breakdown for an order                              */
 /* ------------------------------------------------------------------ */
@@ -268,9 +314,8 @@ export async function withdrawFromWallet(
 }
 
 /* ==================================================================== */
-/*  PAY ESCROW (30%) — buyer debits full 30% of buyer_total;           */
-/*  30% of farmer_net goes to farmer's LOCKED balance;                 */
-/*  rest goes to platform admin (fees + transport)                     */
+/*  PAY 30% ADVANCE — buyer pays 30% of crop value;                     */
+/*  30% of farmer net is immediately available to the farmer.           */
 /* ==================================================================== */
 export async function payEscrowFromWallet(
   _prev: WalletActionResult,
@@ -335,9 +380,9 @@ export async function payEscrowFromWallet(
     (pool as { crop?: string } | undefined)?.crop ??
     "Order";
 
-  // Escrow is 30% of crop value; fees and transport are settled after delivery.
+  // The buyer's 30% advance is paid out immediately; final fees settle on completion.
   const buyerDebit30 = r2(b.gross * 0.3);
-  const farmerLocked30 = r2(b.farmerNet * 0.3);
+  const farmerCredit30 = r2(b.farmerNet * 0.3);
 
   /* -------- 1. Debit buyer 30% -------- */
   const { error: debitErr } = await admin.rpc("wallet_debit", {
@@ -345,7 +390,7 @@ export async function payEscrowFromWallet(
     p_amount: buyerDebit30,
     p_kind: "escrow_paid",
     p_reference_id: order.id,
-    p_description: `30% escrow · ${crop} · #${order.id.slice(0, 8)}`,
+    p_description: `30% order advance · ${crop} · #${order.id.slice(0, 8)}`,
   });
   if (debitErr) {
     if (!debitErr.message.includes("duplicate key")) {
@@ -353,45 +398,45 @@ export async function payEscrowFromWallet(
     }
   }
 
-  /* -------- 2. Credit farmer (or FPO) 30% as LOCKED -------- */
+  /* -------- 2. Credit farmer (or FPO) 30% as available -------- */
   if (order.pool_id && pool && (pool as { fpo_id?: string }).fpo_id) {
     const fpoId = (pool as { fpo_id: string }).fpo_id;
 
-    const { error: lockedError } = await admin.rpc("fpo_wallet_credit_locked", {
+    const { error: creditError } = await admin.rpc("fpo_wallet_credit", {
       p_fpo_id: fpoId,
-      p_amount: farmerLocked30,
-      p_kind: "escrow_locked",
+      p_amount: farmerCredit30,
+      p_kind: "pool_advance_received",
       p_reference_id: order.id,
-      p_description: `30% locked escrow · ${crop} pool`,
+      p_description: `30% advance · ${crop} pool`,
     });
-    if (lockedError && !lockedError.message.includes("duplicate key")) {
-      return { ok: false, error: lockedError.message };
+    if (creditError && !creditError.message.includes("duplicate key")) {
+      return { ok: false, error: creditError.message };
     }
 
     await admin.from("notifications").insert({
       user_id: fpoId,
       kind: "escrow_paid",
-      title: "30% locked escrow received on FPO pool",
-      body: `₹${farmerLocked30.toLocaleString("en-IN")} locked in FPO wallet until buyer confirms delivery.`,
+      title: "30% order advance received",
+      body: `₹${farmerCredit30.toLocaleString("en-IN")} is available in the FPO wallet.`,
       link: "/farmer/fpo/dashboard/wallet",
     });
   } else {
-    const { error: lockedError } = await admin.rpc("wallet_credit_locked", {
+    const { error: creditError } = await admin.rpc("wallet_credit", {
       p_user_id: order.farmer_id,
-      p_amount: farmerLocked30,
-      p_kind: "escrow_locked",
+      p_amount: farmerCredit30,
+      p_kind: "advance_received",
       p_reference_id: order.id,
-      p_description: `30% locked escrow · ${crop} order`,
+      p_description: `30% order advance · ${crop}`,
     });
-    if (lockedError && !lockedError.message.includes("duplicate key")) {
-      return { ok: false, error: lockedError.message };
+    if (creditError && !creditError.message.includes("duplicate key")) {
+      return { ok: false, error: creditError.message };
     }
 
     await admin.from("notifications").insert({
       user_id: order.farmer_id,
       kind: "escrow_paid",
-      title: "30% locked escrow received",
-      body: `₹${farmerLocked30.toLocaleString("en-IN")} locked in your wallet until buyer confirms delivery for ${crop}.`,
+      title: "30% order advance received",
+      body: `₹${farmerCredit30.toLocaleString("en-IN")} is available in your wallet for ${crop}.`,
       link: "/wallet",
     });
   }
@@ -428,8 +473,9 @@ export async function payEscrowFromWallet(
 }
 
 /* ==================================================================== */
-/*  CONFIRM DELIVERY (70%) — buyer debits 70%; farmer's 30% unlocks;  */
-/*  farmer's 70% credited as available; admin gets remaining fees     */
+/*  CONFIRM DELIVERY (70%) — buyer pays remaining balance;             */
+/*  farmer receives the remaining 70% as available;                    */
+/*  legacy locked advances are unlocked for orders created pre-change. */
 /* ==================================================================== */
 export async function confirmDeliveryFromWallet(
   _prev: WalletActionResult,
@@ -460,7 +506,7 @@ export async function confirmDeliveryFromWallet(
   // Idempotency
   if (order.status === "completed") return { ok: true };
   if (order.status !== "delivered") {
-    return { ok: false, error: "Seller hasn't marked this as delivered yet." };
+    return { ok: false, error: "Admin hasn't marked this order as delivered yet." };
   }
 
   const b = await computeOrderBreakdown(order);
@@ -499,8 +545,24 @@ export async function confirmDeliveryFromWallet(
   const buyerDebit70 = r2(
     Math.max(0, b.buyerTotal - Number(order.escrow_amount_paid || 0))
   );
-  const farmerUnlock30 = r2(b.farmerNet * 0.3);
-  const farmerCredit70 = r2(b.farmerNet * 0.7);
+  const isFpoOrder = Boolean(
+    order.pool_id && pool && (pool as { fpo_id?: string }).fpo_id
+  );
+  const sellerWalletId = isFpoOrder
+    ? (pool as { fpo_id: string }).fpo_id
+    : order.farmer_id;
+  const advanceState = await getAdvanceWalletState(
+    admin,
+    order.id,
+    sellerWalletId,
+    isFpoOrder
+  );
+  if (advanceState.error) return { ok: false, error: advanceState.error };
+  const farmerFinalShare =
+    advanceState.hasAvailableAdvance || advanceState.lockedAdvance > 0
+      ? 0.7
+      : 1;
+  const farmerCreditFinal = r2(b.farmerNet * farmerFinalShare);
 
   /* -------- 1. Debit buyer 70% -------- */
   const { error: debitErr } = await admin.rpc("wallet_debit", {
@@ -516,29 +578,30 @@ export async function confirmDeliveryFromWallet(
     }
   }
 
-  /* -------- 2. Unlock + credit seller -------- */
+  /* -------- 2. Credit seller; unlock only advances from the old flow -------- */
   if (order.pool_id && pool && (pool as { fpo_id?: string }).fpo_id) {
     const fpoId = (pool as { fpo_id: string }).fpo_id;
 
-    // Unlock the 30% that was locked at escrow
-    const { error: unlockError } = await admin.rpc("fpo_wallet_unlock", {
-      p_fpo_id: fpoId,
-      p_amount: farmerUnlock30,
-      p_kind: "escrow_unlocked",
-      p_reference_id: order.id,
-      p_description: `Unlocked 30% · ${crop} pool`,
-    });
-    if (unlockError && !unlockError.message.includes("duplicate key")) {
-      return { ok: false, error: unlockError.message };
+    if (advanceState.lockedAdvance > 0) {
+      const { error: unlockError } = await admin.rpc("fpo_wallet_unlock", {
+        p_fpo_id: fpoId,
+        p_amount: advanceState.lockedAdvance,
+        p_kind: "escrow_unlocked",
+        p_reference_id: order.id,
+        p_description: `Legacy advance unlocked · ${crop} pool`,
+      });
+      if (unlockError && !unlockError.message.includes("duplicate key")) {
+        return { ok: false, error: unlockError.message };
+      }
     }
 
-    // Credit the 70%
+    // Credit the remaining farmer share (or the full share for unreconciled legacy orders).
     const { error: creditError } = await admin.rpc("fpo_wallet_credit", {
       p_fpo_id: fpoId,
-      p_amount: farmerCredit70,
+      p_amount: farmerCreditFinal,
       p_kind: "pool_received",
       p_reference_id: order.id,
-      p_description: `70% final · ${crop} pool`,
+      p_description: `${Math.round(farmerFinalShare * 100)}% final · ${crop} pool`,
     });
     if (creditError && !creditError.message.includes("duplicate key")) {
       return { ok: false, error: creditError.message };
@@ -596,25 +659,26 @@ export async function confirmDeliveryFromWallet(
       }
     }
   } else {
-    // Unlock farmer's 30%
-    const { error: unlockError } = await admin.rpc("wallet_unlock", {
-      p_user_id: order.farmer_id,
-      p_amount: farmerUnlock30,
-      p_kind: "escrow_unlocked",
-      p_reference_id: order.id,
-      p_description: `Unlocked 30% · ${crop} order`,
-    });
-    if (unlockError && !unlockError.message.includes("duplicate key")) {
-      return { ok: false, error: unlockError.message };
+    if (advanceState.lockedAdvance > 0) {
+      const { error: unlockError } = await admin.rpc("wallet_unlock", {
+        p_user_id: order.farmer_id,
+        p_amount: advanceState.lockedAdvance,
+        p_kind: "escrow_unlocked",
+        p_reference_id: order.id,
+        p_description: `Legacy advance unlocked · ${crop} order`,
+      });
+      if (unlockError && !unlockError.message.includes("duplicate key")) {
+        return { ok: false, error: unlockError.message };
+      }
     }
 
-    // Credit farmer's 70%
+    // Credit the remaining farmer share (or the full share for unreconciled legacy orders).
     const { error: creditError } = await admin.rpc("wallet_credit", {
       p_user_id: order.farmer_id,
-      p_amount: farmerCredit70,
+      p_amount: farmerCreditFinal,
       p_kind: "payout_received",
       p_reference_id: order.id,
-      p_description: `70% final · ${crop} order`,
+      p_description: `${Math.round(farmerFinalShare * 100)}% final · ${crop} order`,
     });
     if (creditError && !creditError.message.includes("duplicate key")) {
       return { ok: false, error: creditError.message };
@@ -624,7 +688,7 @@ export async function confirmDeliveryFromWallet(
       user_id: order.farmer_id,
       kind: "payout_released",
       title: "Final payment released",
-      body: `₹${r2(farmerUnlock30 + farmerCredit70).toLocaleString("en-IN")} now available in your wallet.`,
+      body: `₹${r2(farmerCreditFinal + advanceState.lockedAdvance).toLocaleString("en-IN")} credited or unlocked in your wallet.`,
       link: "/wallet",
     });
   }

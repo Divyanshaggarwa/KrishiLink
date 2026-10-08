@@ -4,6 +4,7 @@ import { Fragment } from "react";
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import DashboardShell from "@/components/DashboardShell";
 import { RejectButton } from "./OfferActions";
 import AcceptModal from "./AcceptModal";
@@ -77,6 +78,23 @@ export default async function OffersReceivedPage() {
       </DashboardShell>
     );
   }
+
+  const acceptedOfferIds = offers
+    .filter((offer) => offer.status === "accepted")
+    .map((offer) => offer.id);
+  const { data: linkedOrders, error: linkedOrdersError } =
+    acceptedOfferIds.length > 0
+      ? await createAdminClient()
+          .from("transactions")
+          .select("offer_id")
+          .in("offer_id", acceptedOfferIds)
+      : { data: [], error: null };
+  if (linkedOrdersError) {
+    throw new Error(`Could not check accepted offers: ${linkedOrdersError.message}`);
+  }
+  const offersWithOrders = new Set(
+    (linkedOrders ?? []).map((order) => order.offer_id)
+  );
 
   // 3. Buyers via public_profiles (no contact info)
   const buyerIds = Array.from(new Set(offers.map((o) => o.buyer_id)));
@@ -323,15 +341,37 @@ export default async function OffersReceivedPage() {
                                   />
                                 </div>
                               ) : (
-                                <span
-                                  className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase ${
-                                    r.status === "accepted"
-                                      ? "bg-[#E3F2FD] text-[#1565C0]"
-                                      : "bg-[#F5F5F5] text-[#6B7A74]"
-                                  }`}
-                                >
-                                  {r.status}
-                                </span>
+                                r.status === "accepted" &&
+                                !offersWithOrders.has(r.offerId) ? (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <span className="text-[10px] text-[#B26A00]">
+                                      Order setup incomplete
+                                    </span>
+                                    <AcceptModal
+                                      offerId={r.offerId}
+                                      buyerName={r.buyerBusiness || r.buyerName}
+                                      pricePerKg={r.pricePerKg}
+                                      offerQty={r.offerQty}
+                                      listingTotalQty={r.quantityKg}
+                                      netKrishilink={r.netPerKg}
+                                      netSelf={r.netPerKg}
+                                      transportCost={r.transportCostTotal}
+                                      pickupMode={r.pickupMode}
+                                      distanceKm={r.distanceKm}
+                                      recovery
+                                    />
+                                  </div>
+                                ) : (
+                                  <span
+                                    className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase ${
+                                      r.status === "accepted"
+                                        ? "bg-[#E3F2FD] text-[#1565C0]"
+                                        : "bg-[#F5F5F5] text-[#6B7A74]"
+                                    }`}
+                                  >
+                                    {r.status}
+                                  </span>
+                                )
                               )}
                             </td>
                           </tr>

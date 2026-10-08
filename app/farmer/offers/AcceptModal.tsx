@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { acceptOfferAction, type OfferActionResult } from "./actions";
 import ButtonSpinner from "@/components/ButtonSpinner";
 
@@ -15,6 +16,7 @@ export default function AcceptModal({
   transportCost,
   pickupMode,
   distanceKm,
+  recovery = false,
 }: {
   offerId: string;
   buyerName: string;
@@ -26,6 +28,7 @@ export default function AcceptModal({
   transportCost: number;
   pickupMode: string;
   distanceKm: number;
+  recovery?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"krishilink" | "self">("krishilink");
@@ -35,6 +38,14 @@ export default function AcceptModal({
     acceptOfferAction,
     null
   );
+  const router = useRouter();
+
+  useEffect(() => {
+    if (state?.ok) {
+      setOpen(false);
+      router.refresh();
+    }
+  }, [state?.ok, router]);
 
   const net = mode === "krishilink" ? netKrishilink : netSelf;
   const total = Number((net * offerQty).toFixed(2));
@@ -47,7 +58,7 @@ export default function AcceptModal({
         onClick={() => setOpen(true)}
         className="whitespace-nowrap rounded-full bg-[#1B4D3E] px-4 py-2 text-xs font-semibold text-white transition-all hover:scale-[1.03]"
       >
-        Accept deal
+        {recovery ? "Finish order setup" : "Accept deal"}
       </button>
 
       {open && (
@@ -60,12 +71,18 @@ export default function AcceptModal({
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="font-display text-lg font-bold text-[#1B4D3E]">
-              Confirm acceptance
+              {recovery ? "Create missing buyer order" : "Confirm acceptance"}
             </h3>
             <p className="mt-1 text-xs text-[#6B7A74]">
               {buyerName} · ₹{pricePerKg.toFixed(2)}/kg · {offerQty} kg ·{" "}
               {distanceKm} km
             </p>
+            {recovery && (
+              <p className="mt-3 rounded-xl bg-[#FFF8E1] p-3 text-xs text-[#8A5A00]">
+                This offer was accepted, but its order was not created. Finish
+                setup to make it visible to the buyer for 30% escrow payment.
+              </p>
+            )}
 
             {/* Transport mode */}
             {pickupMode === "delivery" ? (
@@ -197,7 +214,7 @@ export default function AcceptModal({
                     <ButtonSpinner size={14} /> Confirming…
                   </>
                 ) : (
-                  "Confirm accept"
+                  recovery ? "Create order for buyer" : "Confirm accept"
                 )}
               </button>
             </form>

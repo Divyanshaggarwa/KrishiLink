@@ -198,9 +198,6 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
     aiStatus.cropVerified &&
     !aiStatus.cropMatchesInput;
 
-  // Soft info when AI returned a grade but couldn't verify crop.
-  const cropUnverified = aiStatus.kind === "done" && !aiStatus.cropVerified;
-
   /* ---------------- Render ---------------- */
   return (
     <form action={formAction} className="space-y-8">
@@ -419,13 +416,6 @@ export default function ListProduceForm({ profile }: { profile: Profile }) {
         </div>
       )}
 
-      {cropUnverified && (
-        <div className="rounded-xl border border-[#FFE0B2] bg-[#FFF8E1] p-3 text-xs text-[#B26A00]">
-          ⓘ The AI returned a grade but could not verify the crop name from the
-          photo. You may still publish if the grade is correct.
-        </div>
-      )}
-
       <div className="flex justify-end gap-3 border-t border-[#E4EBE6] pt-6">
         <button
           type="submit"
@@ -508,13 +498,18 @@ function AiStatusLine({
       );
     }
 
-    // Case 3: Grade found but crop not returned by model → soft info
+    // Case 3: Grade found but crop not returned by model → show decision and manual check separately.
     return (
-      <p className="mt-2 rounded-lg bg-[#FFF8E1] px-3 py-2 text-[11px] text-[#B26A00]">
-        ⓘ AI graded <strong>Grade {status.grade}</strong> ({gradePct}%
-        confidence). Crop could not be auto-verified — please confirm grade
-        manually.
-      </p>
+      <>
+        <p className="mt-2 rounded-lg bg-[#EAF5EE] px-3 py-2 text-[11px] font-medium text-[#2E7D32]">
+          ✓ AI decision: <strong>Grade {status.grade}</strong> · {gradePct}%
+          confidence
+        </p>
+        <p className="mt-2 rounded-lg bg-[#FFF8E1] px-3 py-2 text-[11px] text-[#B26A00]">
+          ⓘ The AI could not verify the crop name from the photo. Please
+          manually check that the crop and grade are correct before publishing.
+        </p>
+      </>
     );
   }
 

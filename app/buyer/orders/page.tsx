@@ -3,6 +3,8 @@ export const dynamic = "force-dynamic";
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { dedupeOrders } from "@/lib/orders/dedupe";
 import DashboardShell from "@/components/DashboardShell";
 import Timeline from "@/components/orders/Timeline";
 import { PayEscrowButton, ConfirmDeliveryButton } from "./OrderButtons";
@@ -11,6 +13,7 @@ import { loadFeeConfig } from "@/lib/nre/fetch-config";
 export default async function BuyerOrdersPage() {
   const profile = await requireRole(["buyer"]);
   const supabase = await createClient();
+  const admin = createAdminClient();
 
   // 1. Buyer wallet balance (for button gating)
   const { data: walletData } = await supabase
@@ -22,15 +25,16 @@ export default async function BuyerOrdersPage() {
   const buyerBalance = Number(walletData?.balance ?? 0);
 
   // 2. All buyer transactions (listing-based OR pool-based)
-  const { data: orders } = await supabase
+  const { data: orders, error: ordersError } = await admin
     .from("transactions")
     .select(
       "id, listing_id, pool_id, offer_id, farmer_id, final_price_per_kg, quantity_kg, gross_amount, net_realization_per_kg, net_amount, buyer_total_payable, escrow_amount_paid, logistics_cost_per_kg, transport_cost_total, transport_mode, distance_km, vehicle_type, status, created_at"
     )
     .eq("buyer_id", profile.id)
     .order("created_at", { ascending: false });
+  if (ordersError) throw new Error(`Could not load your orders: ${ordersError.message}`);
 
-  const safeOrders = orders || [];
+  const { orders: safeOrders, duplicateCount } = dedupeOrders(orders || []);
   const fees = await loadFeeConfig();
 
   // 3. Listings lookup
@@ -40,7 +44,7 @@ export default async function BuyerOrdersPage() {
 
   const { data: listings } =
     listingIds.length > 0
-      ? await supabase
+      ? await admin
           .from("listings")
           .select("id, crop, quality_grade")
           .in("id", listingIds)
@@ -55,7 +59,7 @@ export default async function BuyerOrdersPage() {
 
   const { data: pools } =
     poolIds.length > 0
-      ? await supabase
+      ? await admin
           .from("fpo_pools")
           .select("id, crop, quality_grade, fpo_id")
           .in("id", poolIds)
@@ -73,7 +77,7 @@ export default async function BuyerOrdersPage() {
 
   const { data: sellers } =
     sellerIds.length > 0
-      ? await supabase
+      ? await admin
           .from("public_profiles")
           .select("id, full_name, district, state, trust_score, business_name")
           .in("id", sellerIds)
@@ -114,6 +118,18 @@ export default async function BuyerOrdersPage() {
           Top up wallet →
         </Link>
       </div>
+
+      {duplicateCount > 0 && (
+        <div
+          role="status"
+          className="mb-6 rounded-xl border border-[#FFE082] bg-[#FFF8E1] p-4 text-xs text-[#8A5A00]"
+        >
+          {duplicateCount} duplicate order{" "}
+          {duplicateCount === 1 ? "record was" : "records were"} found and
+          consolidated for display. Please contact support before paying twice;
+          wallet entries may need reconciliation.
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid gap-5 md:grid-cols-3">
@@ -278,6 +294,10 @@ export default async function BuyerOrdersPage() {
                 {/* Escrow payment button */}
                 {o.status === "escrow_pending" && (
                   <div className="mt-5 flex justify-end border-t border-[#E4EBE6] pt-5">
+                    <div className="mr-auto max-w-md self-center text-xs text-[#6B7A74]">
+                      Deal accepted. Pay the 30% advance to confirm the order;
+                      it is credited to the farmer immediately, not locked.
+                    </div>
                     <PayEscrowButton
                       orderId={o.id}
                       amount={Number((Number(o.gross_amount) * 0.3).toFixed(2))}

@@ -34,9 +34,9 @@ export async function acceptOfferAction(
 
   if (!offerId) return { error: "Offer ID missing." };
 
-  const supabase = await createClient();
+  const admin = createAdminClient();
 
-  const { data: offer } = await supabase
+  const { data: offer, error: offerError } = await admin
     .from("offers")
     .select(
       "id, listing_id, buyer_id, price_per_kg, quantity_kg, pickup_mode, status, listing:listings(id, farmer_id, status, crop, quantity_kg, quality_grade, district, state)"
@@ -44,77 +44,54 @@ export async function acceptOfferAction(
     .eq("id", offerId)
     .single();
 
+  if (offerError) return { error: `Could not load offer: ${offerError.message}` };
   if (!offer) return { error: "Offer not found." };
 
   const listing = Array.isArray(offer.listing) ? offer.listing[0] : offer.listing;
   if (!listing || listing.farmer_id !== profile.id) {
     return { error: "You don't own this listing." };
   }
-  if (listing.status !== "active") {
+  const offerWasPending = offer.status === "pending";
+  if (offerWasPending && listing.status !== "active") {
     return { error: "This listing is no longer active." };
   }
-  if (offer.status !== "pending") {
+  if (!offerWasPending && offer.status !== "accepted") {
     return { error: "This offer is no longer pending." };
   }
-  if (offer.quantity_kg > listing.quantity_kg) {
+  if (offerWasPending && offer.quantity_kg > listing.quantity_kg) {
     return { error: "Offer quantity exceeds available stock." };
   }
 
-  // Accept this offer
-  await supabase.from("offers").update({ status: "accepted" }).eq("id", offerId);
+  const { data: existingOrder, error: existingOrderError } = await admin
+    .from("transactions")
+    .select("id")
+    .eq("offer_id", offerId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (existingOrderError) {
+    return { error: `Could not check for an existing order: ${existingOrderError.message}` };
+  }
 
-  const remaining = Number(listing.quantity_kg) - Number(offer.quantity_kg);
-
-  if (remaining <= 0) {
-    // Fully sold — reject other pending, mark listing sold
-    await supabase
-      .from("offers")
-      .update({ status: "rejected" })
-      .eq("listing_id", listing.id)
-      .eq("status", "pending")
-      .neq("id", offerId);
-
-    await supabase.from("listings").update({ status: "sold" }).eq("id", listing.id);
-  } else if (relistLeftover) {
-    // Partial + farmer chose to re-list → keep listing active, update qty
-    await supabase
-      .from("listings")
-      .update({ quantity_kg: remaining, status: "active" })
-      .eq("id", listing.id);
-
-    // Auto-reject other pending offers that exceed the new remaining
-    const { data: overOffers } = await supabase
-      .from("offers")
-      .select("id, quantity_kg")
-      .eq("listing_id", listing.id)
-      .eq("status", "pending");
-
-    const toReject = (overOffers || [])
-      .filter((o) => Number(o.quantity_kg) > remaining)
-      .map((o) => o.id);
-
-    if (toReject.length > 0) {
-      await supabase.from("offers").update({ status: "rejected" }).in("id", toReject);
+  if (existingOrder) {
+    if (offerWasPending) {
+      const finalizeError = await finalizeAcceptedOffer(admin, {
+        offerId,
+        listingId: listing.id,
+        listingQuantity: Number(listing.quantity_kg),
+        offerQuantity: Number(offer.quantity_kg),
+        relistLeftover,
+      });
+      if (finalizeError) return { error: finalizeError };
     }
-  } else {
-    // Partial + farmer declined to re-list → expire listing, reject others
-    await supabase
-      .from("listings")
-      .update({ status: "expired", quantity_kg: remaining })
-      .eq("id", listing.id);
-
-    await supabase
-      .from("offers")
-      .update({ status: "rejected" })
-      .eq("listing_id", listing.id)
-      .eq("status", "pending")
-      .neq("id", offerId);
+    revalidateOrderFlow();
+    return { ok: true };
   }
 
   // Distance + cost
   const [{ data: farmerProfile }, { data: buyerProfile }] = await Promise.all([
-    supabase.from("profiles").select("district, state").eq("id", profile.id).single(),
-    supabase.from("profiles").select("district, state").eq("id", offer.buyer_id).single(),
+    admin.from("profiles").select("district, state").eq("id", profile.id).single(),
+    admin.from("profiles").select("district, state").eq("id", offer.buyer_id).single(),
   ]);
 
   const distance = estimateDistanceFromDistricts(
@@ -190,7 +167,6 @@ export async function acceptOfferAction(
   );
   let transporterId: string | null = null;
   if (requiresDelivery && transportMode === "krishilink") {
-    const admin = createAdminClient();
     const { data: adminProfile } = await admin
       .from("profiles")
       .select("id")
@@ -206,7 +182,7 @@ export async function acceptOfferAction(
     transporterId = profile.id;
   }
 
-  const { error: transactionError } = await supabase.from("transactions").insert({
+  const { error: transactionError } = await admin.from("transactions").insert({
     listing_id: listing.id,
     offer_id: offerId,
     farmer_id: profile.id,
@@ -236,10 +212,51 @@ export async function acceptOfferAction(
     status: "escrow_pending",
   });
   if (transactionError) {
+    if (transactionError.code === "23505") {
+      const { data: existingOrder, error: existingOrderError } = await admin
+        .from("transactions")
+        .select("id")
+        .eq("offer_id", offerId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (existingOrderError) {
+        return {
+          error: `Order already exists, but could not reload it: ${existingOrderError.message}`,
+        };
+      }
+      if (existingOrder) {
+        if (offerWasPending) {
+          const finalizeError = await finalizeAcceptedOffer(admin, {
+            offerId,
+            listingId: listing.id,
+            listingQuantity: Number(listing.quantity_kg),
+            offerQuantity: Number(offer.quantity_kg),
+            relistLeftover,
+          });
+          if (finalizeError) return { error: finalizeError };
+        }
+        revalidateOrderFlow();
+        return { ok: true };
+      }
+    }
     return { error: `Could not create the order: ${transactionError.message}` };
   }
 
-  await supabase.from("notifications").insert({
+  if (offerWasPending) {
+    const finalizeError = await finalizeAcceptedOffer(admin, {
+      offerId,
+      listingId: listing.id,
+      listingQuantity: Number(listing.quantity_kg),
+      offerQuantity: Number(offer.quantity_kg),
+      relistLeftover,
+    });
+    if (finalizeError) {
+      return { error: `Order created, but listing update needs attention: ${finalizeError}` };
+    }
+  }
+
+  await admin.from("notifications").insert({
     user_id: offer.buyer_id,
     kind: "offer_accepted",
     title: `Your offer on ${listing.crop} was accepted`,
@@ -247,6 +264,107 @@ export async function acceptOfferAction(
     link: "/buyer/orders",
   });
 
+  revalidateOrderFlow();
+
+  return { ok: true };
+}
+
+async function finalizeAcceptedOffer(
+  admin: ReturnType<typeof createAdminClient>,
+  {
+    offerId,
+    listingId,
+    listingQuantity,
+    offerQuantity,
+    relistLeftover,
+  }: {
+    offerId: string;
+    listingId: string;
+    listingQuantity: number;
+    offerQuantity: number;
+    relistLeftover: boolean;
+  }
+): Promise<string | null> {
+  const { data: acceptedOffer, error: acceptError } = await admin
+    .from("offers")
+    .update({ status: "accepted" })
+    .eq("id", offerId)
+    .eq("status", "pending")
+    .select("id")
+    .maybeSingle();
+  if (acceptError) return `Could not accept offer: ${acceptError.message}`;
+  if (!acceptedOffer) {
+    const { data: currentOffer, error: currentOfferError } = await admin
+      .from("offers")
+      .select("status")
+      .eq("id", offerId)
+      .single();
+    if (currentOfferError) {
+      return `Could not verify the accepted offer: ${currentOfferError.message}`;
+    }
+    if (currentOffer?.status === "accepted") return null;
+    return "This offer changed while the order was being created. Refresh and check its status.";
+  }
+
+  const remaining = listingQuantity - offerQuantity;
+  if (remaining <= 0) {
+    const { error: listingError } = await admin
+      .from("listings")
+      .update({ status: "sold" })
+      .eq("id", listingId);
+    if (listingError) return `Could not update listing: ${listingError.message}`;
+
+    const { error: rejectError } = await admin
+      .from("offers")
+      .update({ status: "rejected" })
+      .eq("listing_id", listingId)
+      .eq("status", "pending")
+      .neq("id", offerId);
+    if (rejectError) return `Could not close other offers: ${rejectError.message}`;
+    return null;
+  }
+
+  const { error: listingError } = await admin
+    .from("listings")
+    .update({
+      quantity_kg: remaining,
+      status: relistLeftover ? "active" : "expired",
+    })
+    .eq("id", listingId);
+  if (listingError) return `Could not update listing: ${listingError.message}`;
+
+  if (relistLeftover) {
+    const { data: pendingOffers, error: pendingError } = await admin
+      .from("offers")
+      .select("id, quantity_kg")
+      .eq("listing_id", listingId)
+      .eq("status", "pending");
+    if (pendingError) return `Could not check remaining offers: ${pendingError.message}`;
+
+    const toReject = (pendingOffers ?? [])
+      .filter((pendingOffer) => Number(pendingOffer.quantity_kg) > remaining)
+      .map((pendingOffer) => pendingOffer.id);
+    if (toReject.length > 0) {
+      const { error: rejectError } = await admin
+        .from("offers")
+        .update({ status: "rejected" })
+        .in("id", toReject);
+      if (rejectError) return `Could not close oversized offers: ${rejectError.message}`;
+    }
+  } else {
+    const { error: rejectError } = await admin
+      .from("offers")
+      .update({ status: "rejected" })
+      .eq("listing_id", listingId)
+      .eq("status", "pending")
+      .neq("id", offerId);
+    if (rejectError) return `Could not close other offers: ${rejectError.message}`;
+  }
+
+  return null;
+}
+
+function revalidateOrderFlow() {
   revalidatePath("/farmer/offers");
   revalidatePath("/farmer/listings");
   revalidatePath("/farmer/orders");
@@ -255,8 +373,6 @@ export async function acceptOfferAction(
   revalidatePath("/buyer/orders");
   revalidatePath("/buyer/browse");
   revalidatePath("/buyer");
-
-  return { ok: true };
 }
 
 export async function rejectOfferAction(
