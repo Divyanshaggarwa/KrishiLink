@@ -134,12 +134,6 @@ export async function acceptOfferAction(
       transportCostTotal
     ).toFixed(2)
   );
-  const transporterFeeTotal =
-    requiresDelivery && transportMode === "krishilink"
-      ? Number(
-          ((transportCostTotal * fees.transporter_fee_pct) / 100).toFixed(2)
-        )
-      : 0;
   const farmerFeeTotal = Number(
     ((gross * fees.farmer_fee_pct) / 100).toFixed(2)
   );
@@ -154,16 +148,6 @@ export async function acceptOfferAction(
   );
   const qualityDeductionTotal = Number(
     (breakdown.qualityDeduction * Number(offer.quantity_kg)).toFixed(2)
-  );
-  const platformFeeTotal = Number(
-    (
-      farmerFeeTotal +
-      buyerFeeTotal +
-      gatewayFeeTotal +
-      handlingTotal +
-      qualityDeductionTotal +
-      transporterFeeTotal
-    ).toFixed(2)
   );
   let transporterId: string | null = null;
   if (requiresDelivery && transportMode === "krishilink") {
@@ -204,11 +188,6 @@ export async function acceptOfferAction(
     gateway_fee_total: gatewayFeeTotal,
     handling_total: handlingTotal,
     quality_deduction_total: qualityDeductionTotal,
-    platform_fee_total: platformFeeTotal,
-    transporter_fee_total: transporterFeeTotal,
-    transporter_payout_total: Number(
-      (transportCostTotal - transporterFeeTotal).toFixed(2)
-    ),
     status: "escrow_pending",
   });
   if (transactionError) {

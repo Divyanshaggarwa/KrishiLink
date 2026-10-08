@@ -751,9 +751,6 @@ export async function confirmDeliveryFromWallet(
       final_amount_paid: buyerDebit70,
       final_paid_at: new Date().toISOString(),
       transporter_id: transporterId,
-      transporter_fee_total: b.transporterFee,
-      transporter_payout_total: b.transporterPayout,
-      platform_fee_total: b.platformFeeTotal,
       status: "completed",
       updated_at: new Date().toISOString(),
     })
