@@ -22,6 +22,7 @@ const TABLES = [
 const REFRESH_DEBOUNCE_MS = 500;
 const POLL_INTERVAL_MS = 20000;
 
+
 export default function LiveSyncProvider({ userId }: { userId?: string }) {
   const router = useRouter();
   const pathname = usePathname();

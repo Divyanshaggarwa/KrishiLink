@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KrishiLink Route-AI</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+:root{--green:#1b4d3e;--green-dark:#12392e;--green-soft:#eaf5ee;--wheat:#e8b04a;--paper:#f5f7f5;--ink:#182a23;--line:#e1e9e4;--mute:#65756d;--red:#c62828}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:var(--ink);background:var(--paper)}
+body{overflow:hidden}
+.app{display:grid;grid-template-columns:minmax(0,1fr) minmax(360px,390px);height:100%;min-height:0;background:#e9efeb}
+aside{grid-column:2;grid-row:1;z-index:500;min-width:0;overflow:auto;padding:0 18px 20px;border-left:1px solid var(--line);background:#fff;box-shadow:-8px 0 24px rgba(24,42,35,.06);scrollbar-width:thin;scrollbar-color:#cbd8d0 transparent}
+.panel-header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:11px;margin:0 -18px 14px;padding:17px 18px 14px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.96);backdrop-filter:blur(10px)}
+.brand-mark{display:grid;width:38px;height:38px;flex:0 0 38px;place-items:center;border-radius:12px;background:var(--green-soft);color:var(--green);font-size:12px;font-weight:800;letter-spacing:-.04em}
+.brand-copy{min-width:0;flex:1}
+h1{margin:0;color:var(--green);font-size:18px;line-height:1.2;letter-spacing:-.025em}
+.sub{margin:4px 0 0;color:var(--mute);font-size:11px;line-height:1.5}
+.connection-pill{display:flex;align-items:center;gap:6px;white-space:nowrap;border:1px solid var(--line);border-radius:999px;padding:5px 8px;color:var(--mute);font-size:10px;font-weight:650}
+.connection-pill:before{width:7px;height:7px;border-radius:50%;background:#389653;content:""}
+.section{margin:0 0 13px;padding:13px;border:1px solid var(--line);border-radius:14px;background:#fff}
+.section-heading{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.section-index{display:grid;width:23px;height:23px;place-items:center;border-radius:8px;background:var(--green-soft);color:var(--green);font-size:10px;font-weight:800}
+h2{margin:0;color:var(--ink);font-size:12px;font-weight:750;letter-spacing:.01em}
+.hint{margin:8px 0 0;color:var(--mute);font-size:10px;line-height:1.5}
+.row,.r{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.row{gap:9px}
+label{display:flex;min-width:0;flex:1;flex-direction:column;gap:5px;margin-bottom:9px;color:#34473e;font-size:10px;font-weight:650}
+input,select{min-width:0;border:1px solid var(--line);border-radius:9px;background:#fff;padding:9px 10px;color:var(--ink);font:inherit;font-size:12px;transition:border-color .15s,box-shadow .15s}
+label input,label select{width:100%}
+.r input[type=text],.r input:not([type]){flex:1}.r select{flex:1}.r input[type=number]{width:72px}
+.u{color:var(--mute);font-size:10px;white-space:nowrap}
+button{min-height:38px;border:0;border-radius:9px;background:var(--green);padding:9px 12px;color:#fff;font-size:12px;font-weight:700;cursor:pointer;transition:background .15s,transform .15s}
+button:hover{background:var(--green-dark)}
+button:active{transform:translateY(1px)}
+button.alt{border:1px solid #cbd9d1;background:#fff;color:var(--green)}
+button.alt:hover{border-color:var(--green);background:var(--green-soft)}
+button.x{display:grid;width:30px;min-height:30px;flex:0 0 30px;place-items:center;padding:3px;background:#fff1f0;color:var(--red)}
+button.x:hover{background:#ffe1df}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--wheat);outline-offset:2px}
+.modes{display:grid;grid-template-columns:1fr;gap:6px;margin:0 0 10px}
+.mode-option{display:flex;align-items:center;gap:8px;margin:0;border:1px solid var(--line);border-radius:9px;padding:8px 9px;background:#fff;color:#46574f;font-size:11px;font-weight:550;cursor:pointer}
+.mode-option:has(input:checked){border-color:#9dc4ab;background:var(--green-soft);color:var(--green)}
+.mode-option input{width:14px;height:14px;margin:0;accent-color:var(--green)}
+.search-row{display:flex;gap:7px}
+.search-row input{flex:1}
+.search-row button{flex:0 0 66px}
+.route-actions{margin-top:12px}
+#loc{width:100%;margin-top:7px}
+#judge{width:100%;margin:0 0 10px;border:1px solid #efdcae;background:#fff9e9;color:#835d12}
+#judge:hover{background:#fff1cc}
+.actions{display:grid;grid-template-columns:1.4fr .8fr;gap:8px}
+#demoZone{width:100%;margin-top:8px}
+#status{min-height:16px;margin:3px 2px 12px;color:var(--mute);font-size:11px;line-height:1.45}
+#status:empty{display:none}
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 13px}
+.kpi{min-width:0;border:1px solid var(--line);border-radius:12px;background:#f7faf8;padding:10px}
+.kpi b{display:block;overflow:hidden;color:var(--green);font-size:17px;line-height:1.25;text-overflow:ellipsis;white-space:nowrap}
+.kpi span{display:block;margin-top:3px;color:var(--mute);font-size:9px;line-height:1.4}
+.kpi.hi{border-color:var(--green);background:var(--green)}
+.kpi.hi b,.kpi.hi span{color:#fff}
+.result-section{margin:0 0 8px;border:1px solid var(--line);border-radius:12px;background:#fff}
+.result-section>summary{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 12px;color:#30453a;font-size:11px;font-weight:750;cursor:pointer;list-style:none}
+.result-section>summary::-webkit-details-marker{display:none}
+.result-section>summary:after{color:var(--mute);content:"+";font-size:16px;font-weight:400}
+.result-section[open]>summary:after{content:"−"}
+.result-content{padding:0 10px 10px}
+.result-count{border-radius:999px;background:var(--green-soft);padding:3px 7px;color:var(--green);font-size:9px;font-weight:700}
+.truck{margin-bottom:7px;border:1px solid var(--line);border-left:4px solid var(--green);border-radius:8px;background:#f8faf9;padding:9px 10px;font-size:11px;line-height:1.5}
+.pk{margin-bottom:7px;border:1px solid var(--line);border-radius:10px;background:#fbfcfb;padding:8px}.pk .r{margin-bottom:5px}
+#pickups .r input,#pickups .r select,#drops .r input{min-width:0;padding:7px;font-size:10px}
+#farmers{overflow-x:auto}
+table{width:100%;min-width:520px;border-collapse:collapse;font-size:10px}
+th,td{padding:7px 5px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}th:first-child,td:first-child{text-align:left}
+.map-stage{position:relative;grid-column:1;grid-row:1;min-width:0;min-height:0;background:#e5edf0}
+#map{position:absolute;inset:0;width:100%;height:100%}
+.leaflet-container{font-family:inherit}
+.map-legend{position:absolute;z-index:400;right:14px;bottom:28px;display:grid;gap:7px;border:1px solid rgba(225,233,228,.9);border-radius:12px;background:rgba(255,255,255,.95);padding:10px 12px;box-shadow:0 5px 18px rgba(24,42,35,.14);backdrop-filter:blur(8px)}
+.legend-item{display:flex;align-items:center;gap:7px;color:#405149;font-size:10px;font-weight:600}
+.legend-dot{width:9px;height:9px;border-radius:50%;background:#1b4d3e}
+.legend-drop{display:grid;width:13px;height:13px;place-items:center;border-radius:50%;background:#26362f;color:#fff;font-size:8px}
+.legend-risk{width:10px;height:10px;border:1px solid #bd3a32;border-radius:50%;background:rgba(198,40,40,.28)}
+.pin{display:flex;width:27px;height:27px;align-items:center;justify-content:center;border:2px solid #fff;border-radius:50%;box-shadow:0 2px 7px rgba(0,0,0,.3);color:#fff;font-size:11px;font-weight:800}
+.leaflet-control-layers,.leaflet-bar{border:1px solid rgba(220,230,223,.95)!important;border-radius:10px!important;box-shadow:0 2px 10px rgba(24,42,35,.14)!important}
+.leaflet-control-layers{padding:4px}
+@media(max-width:900px){.app{grid-template-columns:minmax(0,1fr) minmax(330px,38vw)}aside{padding-right:13px;padding-left:13px}.panel-header{margin-right:-13px;margin-left:-13px;padding-right:13px;padding-left:13px}}
+@media(max-width:700px){body{overflow:auto}.app{grid-template-columns:1fr;grid-template-rows:minmax(48vh,56vh) auto;height:auto;min-height:100%}.map-stage{grid-column:1;grid-row:1;min-height:48vh}.map-legend{right:10px;bottom:22px}aside{grid-column:1;grid-row:2;overflow:visible;border-top:1px solid var(--line);border-left:0;padding:0 14px 18px}.panel-header{position:relative;margin-right:-14px;margin-left:-14px;padding-right:14px;padding-left:14px}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside>
+  <header class="panel-header">
+    <div class="brand-mark">KL</div>
+    <div class="brand-copy">
+      <h1>Route planning</h1>
+      <p class="sub">KrishiLink logistics workspace</p>
+    </div>
+    <span class="connection-pill">Live map</span>
+  </header>
+  <div class="panel-body">
+    <button id="judge">Judge mode · deliver to Shivalik</button>
+    <section class="section">
+      <div class="section-heading"><span class="section-index">01</span><h2>Route settings</h2></div>
+      <div class="row">
+        <label>Truck capacity<input id="cap" type="number" value="8000" min="500" step="500"></label>
+        <label>Cost per km<input id="cpk" type="number" value="22" min="1"></label>
+      </div>
+      <label>Route preference<select id="pref"><option value="safe">Safest · avoid risk zones</option><option value="fast">Fastest route</option></select></label>
+    </section>
+    <section class="section">
+      <div class="section-heading"><span class="section-index">02</span><h2>Build your route</h2></div>
+      <div class="modes">
+        <label class="mode-option"><input type="radio" name="mode" value="pickup" checked> Add a pickup point</label>
+        <label class="mode-option"><input type="radio" name="mode" value="drop"> Add a drop point</label>
+        <label class="mode-option"><input type="radio" name="mode" value="risk"> Mark a risk zone</label>
+      </div>
+      <div class="search-row"><input id="q" placeholder="Search a place in India"><button id="find">Add</button></div>
+      <button id="loc" class="alt">Use my current location</button>
+      <p class="hint">Risk zones mark roads to avoid; each covers about 1.5 km. Live incident data is not used.</p>
+      <div class="actions route-actions"><button id="go">Optimize routes</button><button id="reset" class="alt">Reset</button></div>
+      <button id="demoZone" class="alt">Add sample risk zone</button>
+    </section>
+    <div id="status" role="status" aria-live="polite"></div>
+    <div id="summary"></div>
+    <details class="result-section" open>
+      <summary>Truck plan <span class="result-count" id="truckCount">Route results</span></summary>
+      <div class="result-content" id="trucks"></div>
+    </details>
+    <details class="result-section">
+      <summary>Pickup points <span class="result-count" id="pickupCount">Edit</span></summary>
+      <div class="result-content" id="pickups"></div>
+    </details>
+    <details class="result-section">
+      <summary>Drop points <span class="result-count">Manage</span></summary>
+      <div class="result-content" id="drops"></div>
+    </details>
+    <details class="result-section">
+      <summary>Farmer net realization</summary>
+      <div class="result-content" id="farmers"></div>
+    </details>
+  </div>
+</aside>
+<div class="map-stage">
+  <div id="map"></div>
+  <div class="map-legend" aria-label="Map legend">
+    <div class="legend-item"><span class="legend-dot"></span>Pickup</div>
+    <div class="legend-item"><span class="legend-drop">A</span>Drop point</div>
+    <div class="legend-item"><span class="legend-risk"></span>Risk zone</div>
+  </div>
+</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/* ============ 1. DATA ============ */
+const BOUNDS = L.latLngBounds([6.5, 68.0], [37.5, 97.5]);
+const PLACES = [
+  ['Pune APMC Market Yard',18.4967,73.8553],['Mumbai Vashi APMC',19.0650,72.9990],['Nashik APMC',20.0059,73.7897],['Delhi Azadpur Mandi',28.7160,77.1750],
+  ['Ahmedabad (Jamalpur) APMC',23.0225,72.5800],['Bengaluru Yeshwanthpur APMC',13.0285,77.5410],['Hyderabad Bowenpally',17.4700,78.4750],['Chennai Koyambedu',13.0690,80.1950],
+  ['Kolkata (Koley Market)',22.5726,88.3639],['Lucknow',26.8467,80.9462],['Jaipur',26.9124,75.7873],['Indore',22.7196,75.8577],['Nagpur',21.1458,79.0882],
+  ['Bhopal',23.2599,77.4126],['Patna',25.5941,85.1376],['Chandigarh',30.7333,76.7794],['Ludhiana',30.9010,75.8573],['Dehradun',30.3165,78.0322]
+];
+const CROPS = [['Onion',18],['Tomato',20],['Potato',16],['Wheat',26],['Rice',32],['Grapes',60],['Banana',14],['Soybean',48]];
+const SEED = [
+  ['Pimpalgaon Baswant',20.1640,73.9870,2500,0,0],['Niphad',20.0830,74.1100,2000,0,1],['Lasalgaon',20.1450,74.2380,3000,0,0],
+  ['Sinnar',19.8480,74.0010,1500,1,1],['Yeola',20.0420,74.4880,1800,0,0],['Dindori',20.2000,73.8300,2200,5,1]
+];
+const COLORS = ['#d1495b','#2e86ab','#e8a317','#6a4c93','#2a9d8f','#8d5524','#c2185b','#455a64'];
+let drops = [], farmers = [], zones = [], lastLines = [];
+const legCache = {};
+function resetData() {
+  drops = [PLACES[0], PLACES[1]].map(p => ({ name: p[0], lat: p[1], lng: p[2] }));
+  farmers = SEED.map(s => ({ name: s[0], lat: s[1], lng: s[2], kg: s[3], crop: CROPS[s[4]][0], price: CROPS[s[4]][1], drop: s[5] }));
+  zones = [];
+}
+
+/* ============ 2. ROUTING ENGINE ============ */
+const qp = new URLSearchParams(location.search);
+const GEO_KEY = qp.get('k') || qp.get('key') || '117b9859e3904df7812ce1719bce5425';
+const SERVERS = ['https://router.project-osrm.org', 'https://routing.openstreetmap.de/routed-car'];
+let lastErr = '', estLegs = 0, runId = 0;
+async function osrm(path) {
+  for (const base of SERVERS) {
+    const host = base.split('/')[2];
+    try {
+      const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 15000);
+      const r = await fetch(base + path, { signal: ctl.signal }); clearTimeout(t);
+      const j = await r.json();
+      if (j.code === 'Ok') return j;
+      lastErr = host + ': ' + (j.code || r.status);
+    } catch (e) { lastErr = host + ': ' + (e.name === 'AbortError' ? 'timeout' : 'blocked or offline'); }
+  }
+  throw new Error(lastErr);
+}
+const ll = p => p.lng + ',' + p.lat;
+const TRUCK_SLOW = 1.25;
+const ZR = 1500;
+const dm = (a, b) => Math.hypot((b.lng - a.lng) * 111320 * Math.cos(a.lat * Math.PI / 180), (b.lat - a.lat) * 110540);
+
+async function getMatrix(pts) {
+  const j = await osrm(`/table/v1/driving/${pts.map(ll).join(';')}?annotations=distance,duration`);
+  const fb = fallbackMatrix(pts);
+  const fix = (M, F) => M.map((r, i) => r.map((v, k) => v == null ? F[i][k] : v));
+  return { D: fix(j.distances, fb.D), T: fix(j.durations, fb.T) };
+}
+function fallbackMatrix(pts) {
+  const D = pts.map(a => pts.map(b => dm(a, b) * 1.3));
+  return { D, T: D.map(r => r.map(d => d / 12)) };
+}
+const zonesHit = line => zones.filter(z => line.some(p => dm({ lat: p[0], lng: p[1] }, z) < ZR)).length;
+
+async function getLeg(a, b, safe, live) {
+  const k = ll(a) + ';' + ll(b);
+  if (live) {
+    try {
+      if (!legCache[k]) {
+        const q = `/route/v1/driving/${k}?overview=full&geometries=geojson`;
+        let j; try { j = await osrm(q + '&alternatives=true'); } catch (e) { j = await osrm(q); }
+        legCache[k] = j.routes.map(r => ({ line: r.geometry.coordinates.map(c => [c[1], c[0]]), dist: r.distance, dur: r.duration }));
+      }
+      const alts = legCache[k].map(r => ({ ...r, hits: zonesHit(r.line) }));
+      let best = alts[0];
+      if (safe) best = alts.reduce((m, r) => (r.hits * 1e7 + r.dist < m.hits * 1e7 + m.dist ? r : m));
+      return { ...best, fast: alts[0] };
+    } catch (e) { /* fall through */ }
+  }
+  estLegs++;
+  const d = dm(a, b) * 1.3;
+  return { line: [[a.lat, a.lng], [b.lat, b.lng]], dist: d, dur: d / 12, hits: 0, fast: null };
+}
+
+const routeLen = (n, M) => { let t = M[0][n[0]]; for (let k = 0; k < n.length - 1; k++) t += M[n[k]][n[k + 1]]; return t + M[n[n.length - 1]][0]; };
+
+function savings(D, loads, cap) {
+  const n = D.length, rt = [null];
+  for (let i = 1; i < n; i++) rt[i] = { nodes: [i], load: loads[i] };
+  const list = [];
+  for (let i = 1; i < n; i++) for (let j = i + 1; j < n; j++) list.push([D[0][i] + D[0][j] - D[i][j], i, j]);
+  list.sort((a, b) => b[0] - a[0]);
+  for (const [s, i, j] of list) {
+    if (s <= 0) break;
+    const a = rt[i], b = rt[j];
+    if (a === b || a.load + b.load > cap) continue;
+    if (a.nodes[a.nodes.length - 1] !== i) { if (a.nodes[0] === i) a.nodes.reverse(); else continue; }
+    if (b.nodes[0] !== j) { if (b.nodes[b.nodes.length - 1] === j) b.nodes.reverse(); else continue; }
+    const m = { nodes: a.nodes.concat(b.nodes), load: a.load + b.load };
+    m.nodes.forEach(x => rt[x] = m);
+  }
+  return [...new Set(rt.slice(1))];
+}
+function twoOpt(nodes, D) {
+  let best = nodes.slice(), improved = true;
+  while (improved) {
+    improved = false;
+    for (let i = 0; i < best.length - 1; i++) for (let j = i + 1; j < best.length; j++) {
+      const c = best.slice(0, i).concat(best.slice(i, j + 1).reverse(), best.slice(j + 1));
+      if (routeLen(c, D) < routeLen(best, D) - 1) { best = c; improved = true; }
+    }
+  }
+  return best;
+}
+
+/* ============ 3. MAP + UI ============ */
+const map = L.map('map', { maxBounds: BOUNDS.pad(.1), minZoom: 5 }).setView([19.8, 74.0], 7);
+const GEO_ATTR = 'Powered by <a href="https://www.geoapify.com/">Geoapify</a> | © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+const geoTiles = style => L.tileLayer(`https://maps.geoapify.com/v1/tile/${style}/{z}/{x}/{y}.png?apiKey=${GEO_KEY}`, { maxZoom: 18, attribution: GEO_ATTR });
+const bright = geoTiles('osm-bright').addTo(map);
+L.control.layers({ 'Bright (Geoapify)': bright, 'Classic (Geoapify)': geoTiles('osm-carto'), 'Light (Geoapify)': geoTiles('positron') }).addTo(map);
+let tileWarned = false;
+map.eachLayer(l => l.on && l.on('tileerror', () => { if (!tileWarned) { tileWarned = true; say('Map tiles are not loading: check the Geoapify key or daily limit.'); } }));
+const layer = L.layerGroup().addTo(map);
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+const fmt = m => m < 90 ? Math.round(m) + ' min' : m < 1440 ? (m / 60).toFixed(1) + ' h' : Math.round(m / 60) + ' h (about ' + Math.ceil(m / 600) + ' driving days)';
+const inr = v => '₹' + Math.round(v).toLocaleString('en-IN');
+const letter = i => String.fromCharCode(65 + i);
+const pin = (txt, color) => L.divIcon({ className: '', iconSize: [26, 26], iconAnchor: [13, 13], html: `<div class="pin" style="background:${color}">${txt}</div>` });
+const say = t => $('status').textContent = t;
+
+function renderEditor() {
+  const dOpts = sel => drops.map((d, i) => `<option value="${i}" ${i === sel ? 'selected' : ''}>${letter(i)} · ${esc(d.name)}</option>`).join('');
+  const cOpts = sel => CROPS.map(c => `<option ${c[0] === sel ? 'selected' : ''}>${c[0]}</option>`).join('');
+  $('pickups').innerHTML = farmers.map((f, i) => `<div class="pk">
+    <div class="r"><input value="${esc(f.name)}" onchange="upd(${i},'name',this.value)"><select onchange="upd(${i},'crop',this.value)">${cOpts(f.crop)}</select></div>
+    <div class="r"><input type="number" min="1" value="${f.kg}" onchange="upd(${i},'kg',+this.value)"><span class="u">kg</span>
+    <input type="number" min="1" value="${f.price}" onchange="upd(${i},'price',+this.value)"><span class="u">₹/kg</span>
+    <select onchange="upd(${i},'drop',+this.value)">${dOpts(f.drop)}</select><button class="x" onclick="removeF(${i})" title="Remove">✕</button></div></div>`).join('')
+    || '<p class="sub">No pickups yet. Choose "add pickup point" and click the map.</p>';
+  $('pickupCount').textContent = farmers.length + (farmers.length === 1 ? ' point' : ' points');
+  $('drops').innerHTML = drops.map((d, i) => `<div class="r"><b>${letter(i)}</b><input value="${esc(d.name)}" onchange="nameDrop(${i},this.value)"><button class="x" onclick="rmDrop(${i})" title="Remove">✕</button></div>`).join('')
+    + `<select id="preset" style="width:100%"><option value="">+ Add a preset drop point…</option>${PLACES.map((p, i) => `<option value="${i}">${p[0]}</option>`).join('')}</select>`;
+  $('preset').onchange = e => {
+    const p = PLACES[e.target.value]; if (!p) return;
+    if (drops.length >= 6) return say('Demo limit: 6 drop points.');
+    drops.push({ name: p[0], lat: p[1], lng: p[2] }); refresh();
+  };
+}
+const refresh = () => { renderEditor(); optimize(); };
+window.upd = (i, k, v) => { farmers[i][k] = v; if (k === 'crop') { farmers[i].price = CROPS.find(c => c[0] === v)[1]; renderEditor(); } optimize(); };
+window.removeF = i => { map.closePopup(); farmers.splice(i, 1); refresh(); };
+window.nameDrop = (i, v) => { drops[i].name = v; refresh(); };
+window.rmZone = i => { map.closePopup(); zones.splice(i, 1); optimize(); };
+window.rmDrop = i => {
+  if (drops.length < 2) return say('Keep at least one drop point.');
+  drops.splice(i, 1); farmers.forEach(f => { if (f.drop === i) f.drop = 0; else if (f.drop > i) f.drop--; }); refresh();
+};
+
+async function optimize() {
+  const run = ++runId;
+  layer.clearLayers(); lastLines = []; estLegs = 0;
+  const cap = +$('cap').value, cpk = +$('cpk').value, safe = $('pref').value === 'safe';
+  zones.forEach((z, i) => L.circle([z.lat, z.lng], { radius: ZR, color: '#c0392b', fillOpacity: .25 }).addTo(layer)
+    .bindPopup(`Risk zone<br><a href="#" onclick="rmZone(${i});return false">Remove</a>`));
+  drops.forEach((d, i) => L.marker([d.lat, d.lng], { icon: pin(letter(i), '#1d2a24') }).addTo(layer).bindPopup(`<b>Drop ${letter(i)}:</b> ${esc(d.name)}`));
+  farmers.forEach(f => L.circleMarker([f.lat, f.lng], { radius: 7, color: '#1f4d3a', fillOpacity: .5 }).addTo(layer));
+  if (!farmers.length) { $('summary').innerHTML = $('trucks').innerHTML = $('farmers').innerHTML = ''; $('truckCount').textContent = '0 trucks'; return say('Add at least one pickup point by clicking the map.'); }
+  say('Calculating best routes…');
+
+  let live = true, nT = 0, optKm = 0, baseKm = 0, hitsAll = 0;
+  const rows = [], truckHtml = [], all = [];
+  for (let di = 0; di < drops.length; di++) {
+    const grp = farmers.filter(f => f.drop === di); if (!grp.length) continue;
+    const pts = [drops[di], ...grp], loads = [0, ...grp.map(f => f.kg)];
+    let D;
+    if (grp.length === 1) {
+      const [a, b] = await Promise.all([getLeg(pts[0], pts[1], false, live), getLeg(pts[1], pts[0], false, live)]);
+      const d = (a.dist + b.dist) / 2; D = [[0, d], [d, 0]];
+    } else { try { if (!live) throw 0; ({ D } = await getMatrix(pts)); } catch (e) { live = false; ({ D } = fallbackMatrix(pts)); } }
+    if (run !== runId) return;
+    baseKm += grp.reduce((s, _, i) => s + 2 * D[0][i + 1], 0) / 1000;
+    const routes = savings(D, loads, cap).map(r => ({ load: r.load, nodes: twoOpt(r.nodes, D) }));
+    for (const r of routes) {
+      const color = COLORS[nT % COLORS.length]; nT++;
+      const seq = [pts[0], ...r.nodes.map(i => pts[i]), pts[0]];
+      let km = 0, mins = 0, hits = 0, det = 0;
+      const legs = await Promise.all(seq.slice(0, -1).map((_, k) => getLeg(seq[k], seq[k + 1], safe, live)));
+      if (run !== runId) return;
+      for (const leg of legs) {
+        L.polyline(leg.line, { color, weight: 5, opacity: .85 }).addTo(layer);
+        lastLines.push(leg.line); km += leg.dist / 1000; mins += leg.dur / 60 * TRUCK_SLOW; hits += leg.hits;
+        if (leg.fast) det += (leg.dist - leg.fast.dist) / 1000;
+      }
+      optKm += km; hitsAll += hits;
+      const cost = km * cpk;
+      r.nodes.forEach((idx, k) => {
+        const f = pts[idx], gross = f.kg * f.price, share = cost * f.kg / r.load, solo = 2 * D[0][idx] / 1000 * cpk;
+        L.marker([f.lat, f.lng], { icon: pin(k + 1, color) }).addTo(layer).bindPopup(`<b>${esc(f.name)}</b><br>${f.crop}: ${f.kg} kg @ ₹${f.price}/kg<br>Truck ${nT}, stop ${k + 1} → drop ${letter(di)}<br><a href="#" onclick="removeF(${farmers.indexOf(f)});return false">Remove this pickup</a>`);
+        rows.push(`<tr><td>${esc(f.name)}</td><td>T${nT}→${letter(di)}</td><td>${inr(gross)}</td><td>${inr(share)}</td><td><b>${inr(gross - share)}</b></td><td style="color:#999">${inr(gross - solo)}</td></tr>`);
+      });
+      const safety = hits ? `⚠ passes ${hits} risk zone(s)` : zones.length ? `✔ avoids all risk zones${det > 0.05 ? ` (+${det.toFixed(1)} km detour)` : ''}` : '';
+      truckHtml.push(`<div class="truck" style="border-color:${color}"><b>Truck ${nT}</b> · drop ${letter(di)} · ${r.nodes.map(i => esc(pts[i].name)).join(' → ')}<br>${r.load}/${cap} kg · ${km.toFixed(1)} km · ${fmt(mins)}${mins > 600 ? ' (needs rest stop or 2nd driver)' : ''} · ${inr(cost)}${safety ? '<br>' + safety : ''}</div>`);
+    }
+    all.push(...pts);
+  }
+  const baseCost = baseKm * cpk, optCost = optKm * cpk;
+  $('summary').innerHTML = `<div class="kpis">
+    <div class="kpi hi"><b>${inr(baseCost - optCost)}</b><span>transport cost saved (${Math.round((1 - optCost / baseCost) * 100)}%)</span></div>
+    <div class="kpi"><b>${nT} trucks</b><span>instead of ${farmers.length} separate trips</span></div>
+    <div class="kpi"><b>${optKm.toFixed(0)} km</b><span>planned (was ${baseKm.toFixed(0)} km)</span></div>
+    <div class="kpi"><b>${zones.length ? (hitsAll ? hitsAll + ' risk hits' : 'All clear') : 'No zones'}</b><span>${zones.length ? zones.length + ' risk zone(s) marked' : 'mark risk zones to test safety'}</span></div></div>`;
+  $('trucks').innerHTML = truckHtml.join('');
+  $('truckCount').textContent = nT + (nT === 1 ? ' truck' : ' trucks');
+  $('farmers').innerHTML = `<table><tr><th>Pickup</th><th>Truck</th><th>Sale</th><th>Transport</th><th>Net</th><th>Net if solo</th></tr>${rows.join('')}</table>`;
+  say(!live ? `Road servers unreachable (${lastErr}). Showing straight-line estimates.` : estLegs ? `${estLegs} stretch(es) shown as straight lines (${lastErr}).` : 'Live OpenStreetMap road data (OSRM).');
+  if (all.length) map.fitBounds(L.latLngBounds(all.map(p => [p.lat, p.lng])).pad(.15));
+}
+
+function addAt(p, label) {
+  if (!BOUNDS.contains(p)) return say('Outside India. Pick a place inside the country.');
+  const mode = document.querySelector('input[name=mode]:checked').value;
+  if (judge && mode === 'drop') return say('Judge mode: the destination is fixed to ' + DEST_NAME + '.');
+  if (judge && mode === 'pickup') farmers = [];
+  if (mode === 'drop') { if (drops.length >= 6) return say('Demo limit: 6 drop points.'); drops.push({ name: label || 'Drop point ' + (drops.length + 1), lat: p.lat, lng: p.lng }); }
+  else if (mode === 'risk') { if (zones.length >= 8) return say('Demo limit: 8 risk zones.'); zones.push({ lat: p.lat, lng: p.lng }); }
+  else { if (farmers.length >= 15) return say('Demo limit: 15 pickup points.'); farmers.push({ name: label || 'Pickup ' + (farmers.length + 1), lat: p.lat, lng: p.lng, kg: 2000, crop: CROPS[0][0], price: CROPS[0][1], drop: 0 }); }
+  refresh();
+  if (judge && mode === 'pickup' && !label) nameIt(farmers[0]);
+}
+map.on('click', e => addAt({ lat: e.latlng.lat, lng: e.latlng.lng }));
+async function geoFetch(url) {
+  const r = await fetch(url + '&apiKey=' + GEO_KEY);
+  if (r.status === 401) throw new Error('Invalid Geoapify key.');
+  if (r.status === 429) throw new Error('Geoapify daily limit reached.');
+  return r.json();
+}
+async function findPlace() {
+  const q = $('q').value.trim(); if (!q) return;
+  say('Searching…');
+  try {
+    const j = await geoFetch(`https://api.geoapify.com/v1/geocode/search?text=${encodeURIComponent(q)}&filter=countrycode:in&limit=1&format=json`);
+    if (!j.results || !j.results.length) return say('Place not found in India. Try another spelling.');
+    addAt({ lat: j.results[0].lat, lng: j.results[0].lon }, q);
+  } catch (e) { say(e.message && e.message.startsWith('Geoapify') ? e.message : 'Search is unavailable on this network. Click the map instead.'); }
+}
+const DEST_NAME = qp.get('name') || 'Shivalik University';
+const DEST = (qp.get('dest') || '30.3363,77.8716').split(',').map(Number);
+let judge = false;
+const JUDGE_TXT = '🎯 Judge mode: deliver to ' + DEST_NAME;
+async function nameIt(f) {
+  try {
+    const j = await geoFetch(`https://api.geoapify.com/v1/geocode/reverse?lat=${f.lat}&lon=${f.lng}&format=json`);
+    const a = (j.results || [])[0] || {}, n = a.suburb || a.village || a.town || a.city || a.county || a.district;
+    if (n && farmers.includes(f)) { f.name = n + (a.state ? ', ' + a.state : ''); refresh(); }
+  } catch (e) { /* keep default name */ }
+}
+function exitJudge() { judge = false; $('judge').textContent = JUDGE_TXT; $('judge').classList.remove('alt'); }
+$('judge').onclick = () => {
+  if (judge) { exitJudge(); resetData(); return refresh(); }
+  judge = true; $('judge').textContent = '🎯 Judge mode ON (click to exit)'; $('judge').classList.add('alt');
+  document.querySelector('input[name=mode][value=pickup]').checked = true;
+  drops = [{ name: DEST_NAME, lat: DEST[0], lng: DEST[1] }]; farmers = []; zones = [];
+  map.setView([22.5, 79], 5); renderEditor(); optimize(); say('Judge mode: click any place in India to send produce to ' + DEST_NAME + '.');
+};
+$('find').onclick = findPlace;
+$('loc').onclick = () => {
+  if (!navigator.geolocation) return say('Location is not supported on this device.');
+  say('Getting your location…');
+  navigator.geolocation.getCurrentPosition(
+    pos => addAt({ lat: pos.coords.latitude, lng: pos.coords.longitude }, 'My location'),
+    () => say('Could not get location. Allow location access (needs https or localhost).'), { timeout: 10000 });
+};
+$('q').onkeydown = e => { if (e.key === 'Enter') findPlace(); };
+$('go').onclick = optimize;
+$('cap').onchange = $('cpk').onchange = $('pref').onchange = optimize;
+$('reset').onclick = () => { exitJudge(); resetData(); refresh(); };
+$('demoZone').onclick = () => {
+  const l = lastLines[0]; if (!l) return say('Wait for the routes to finish, then try again.');
+  const p = l[Math.floor(l.length / 2)]; zones.push({ lat: p[0], lng: p[1] }); optimize();
+};
+
+/* ============ 4. HANDSHAKE + PARENT MESSAGING ============ */
+const PARENT_ORIGIN = (() => { try { return window.location.origin; } catch { return '*'; } })();
+
+function notifyParent(type, payload) {
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type, ...payload }, PARENT_ORIGIN);
+    }
+  } catch (e) { console.warn('[route-ai] notifyParent failed', e); }
+}
+
+window.addEventListener('message', e => {
+  if (PARENT_ORIGIN !== '*' && e.origin !== PARENT_ORIGIN) return;
+  const m = e.data;
+  if (!m || m.type !== 'krishilink-orders') return;
+  if (!Array.isArray(m.drops) || !Array.isArray(m.pickups)) {
+    notifyParent('krishilink-orders-failed', { error: 'malformed payload' });
+    return;
+  }
+  try {
+    drops = m.drops.slice(0, 6).map(d => ({ name: String(d.name), lat: +d.lat, lng: +d.lng }));
+    farmers = m.pickups.slice(0, 15).map(f => ({
+      name: String(f.name), lat: +f.lat, lng: +f.lng,
+      kg: +f.kg || 100, crop: String(f.crop),
+      price: +f.price || 20,
+      drop: Math.min(Math.max(+f.drop || 0, 0), Math.max(drops.length - 1, 0)),
+    }));
+    refresh();
+    notifyParent('krishilink-orders-applied', { drops: drops.length, pickups: farmers.length });
+  } catch (err) {
+    console.error('[route-ai] apply orders failed', err);
+    notifyParent('krishilink-orders-failed', { error: String(err) });
+  }
+});
+
+/* Parent can ask the iframe to re-measure (sidebar toggle, etc.) */
+window.addEventListener('message', e => {
+  if (PARENT_ORIGIN !== '*' && e.origin !== PARENT_ORIGIN) return;
+  if (e.data?.type !== 'krishilink-invalidate') return;
+  try { map.invalidateSize(); } catch { /* ignore */ }
+});
+
+/* Leaflet pauses when tab is hidden; re-measure on return */
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    setTimeout(() => { try { map.invalidateSize(); } catch { /* ignore */ } }, 100);
+  }
+});
+
+/* Hide judge button when embedded */
+if (qp.get('embed') === '1') {
+  $('judge').style.display = 'none';
+} else {
+  $('judge').textContent = JUDGE_TXT;
+}
+
+/* Boot + signal readiness */
+resetData();
+refresh();
+setTimeout(() => notifyParent('krishilink-iframe-ready', {}), 60);
+</script>
+</body>
+</html>

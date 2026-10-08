@@ -3,10 +3,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getCurrentProfile } from "@/lib/auth";
 import { getDistrictCoords, jitterCoords } from "@/lib/route-ai/districts";
-import type {
-  DropPoint,
-  PickupPoint,
-} from "@/lib/route-ai";
+import type { DropPoint, PickupPoint } from "@/lib/route-ai";
 
 export interface LoadedOrderData {
   drops: DropPoint[];
@@ -100,15 +97,16 @@ export async function loadOrdersForRouting(): Promise<LoadedOrderData | null> {
     }
 
     // Determine pickup source (farmer or FPO head)
-    const listing = Array.isArray(order.listing) ? order.listing[0] : order.listing;
+    const listing = Array.isArray(order.listing)
+      ? order.listing[0]
+      : order.listing;
     const pool = Array.isArray(order.pool) ? order.pool[0] : order.pool;
 
     const pickupUserId = pool?.fpo_id ?? order.farmer_id;
     const pickupUser = userMap.get(pickupUserId);
     if (!pickupUser) continue;
 
-    const cropName =
-      listing?.crop ?? pool?.crop ?? "Produce";
+    const cropName = listing?.crop ?? pool?.crop ?? "Produce";
 
     const pickCoords = jitterCoords(
       getDistrictCoords(
