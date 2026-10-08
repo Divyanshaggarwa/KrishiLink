@@ -15,6 +15,7 @@ export interface RouteResult {
   durationMin: number;
   polyline: [number, number][];
   vehicle: string;
+  source: "road" | "estimate";
   cachedAt: number;
 }
 
@@ -55,6 +56,7 @@ export async function computeRoute(
             ([lng, lat]: [number, number]) => [lat, lng]
           ),
           vehicle: "Tempo",
+          source: "road",
           cachedAt: Date.now(),
         };
         routeCache.set(key, result);
@@ -86,6 +88,61 @@ export async function computeRoute(
       [b.lat, b.lng],
     ],
     vehicle: "Tempo",
+    source: "estimate",
+    cachedAt: Date.now(),
+  };
+}
+
+async function computeMultiStopRoute(
+  stops: GeoPoint[],
+  vehicle: string
+): Promise<RouteResult> {
+  const key = `stops:${stops
+    .map((point) => `${point.lat.toFixed(4)},${point.lng.toFixed(4)}`)
+    .join(";")}`;
+  const cached = routeCache.get(key);
+  if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
+    return { ...cached, vehicle };
+  }
+
+  try {
+    const coordinates = stops
+      .map((point) => `${point.lng},${point.lat}`)
+      .join(";");
+    const response = await fetch(
+      `${OSRM}/route/v1/driving/${coordinates}?overview=full&geometries=geojson&steps=false`,
+      { signal: AbortSignal.timeout(8000) }
+    );
+    const result = await response.json();
+    const roadRoute = result.routes?.[0];
+    if (response.ok && result.code === "Ok" && roadRoute) {
+      const route: RouteResult = {
+        distanceKm: Number((roadRoute.distance / 1000).toFixed(2)),
+        durationMin: Math.round(roadRoute.duration / 60),
+        polyline: roadRoute.geometry.coordinates.map(
+          ([lng, lat]: [number, number]) => [lat, lng]
+        ),
+        vehicle,
+        source: "road",
+        cachedAt: Date.now(),
+      };
+      routeCache.set(key, route);
+      return route;
+    }
+  } catch {
+    // Keep route sharing available while clearly identifying estimated geometry.
+  }
+
+  let distanceKm = 0;
+  for (let index = 1; index < stops.length; index++) {
+    distanceKm += haversineKm(stops[index - 1], stops[index]) * 1.3;
+  }
+  return {
+    distanceKm: Number(distanceKm.toFixed(2)),
+    durationMin: Math.round((distanceKm / 35) * 60),
+    polyline: stops.map((point) => [point.lat, point.lng]),
+    vehicle,
+    source: "estimate",
     cachedAt: Date.now(),
   };
 }
@@ -103,8 +160,13 @@ export interface OrderRouteContext {
     quantityKg: number;
     pricePerKg: number;
     grossAmount: number;
+    netRealizationPerKg: number | null;
+    netRealizationTotal: number | null;
+    buyerTotalPayable: number | null;
     logisticsCostPerKg: number;
+    transportMode: string | null;
     distanceKm: number;
+    updatedAt: string;
   };
   farmer: {
     id: string;
@@ -132,6 +194,7 @@ export interface NearbyOrder {
   shortId: string;
   crop: string;
   quantityKg: number;
+  transportCostTotal: number;
   status: string;
   farmerName: string;
   buyerName: string;
@@ -153,6 +216,9 @@ export interface ConsolidationSuggestion {
   savingsTotal: number;
   savingsPercent: number;
   savingsPerKg: number;
+  routeKm: number;
+  routeDurationMin: number;
+  routeSource: "road" | "estimate";
   combinedPolyline: [number, number][];
   stops: Array<{
     kind: "pickup" | "drop";
@@ -160,6 +226,7 @@ export interface ConsolidationSuggestion {
     lat: number;
     lng: number;
     orderId: string;
+    crop: string;
   }>;
 }
 
@@ -179,7 +246,7 @@ export async function getOrderRouteContext(
   const { data: order } = await admin
     .from("transactions")
     .select(
-      "id, farmer_id, buyer_id, quantity_kg, gross_amount, final_price_per_kg, logistics_cost_per_kg, distance_km, status, pool_id, listing:listings(crop), pool:fpo_pools(crop, fpo_id)"
+      "id, farmer_id, buyer_id, quantity_kg, gross_amount, net_realization_per_kg, net_amount, buyer_total_payable, transport_cost_total, final_price_per_kg, logistics_cost_per_kg, distance_km, status, updated_at, transport_mode, transporter_id, vehicle_type, pool_id, listing:listings(crop), pool:fpo_pools(crop, fpo_id)"
     )
     .eq("id", orderId)
     .single();
@@ -229,37 +296,43 @@ export async function getOrderRouteContext(
   const route = await computeRoute(farmerCoords, buyerCoords);
   const vehicle = pickVehicle(Number(order.quantity_kg));
 
-  const nearbyOrders = await findNearbyOrders(
-    order.id,
-    pickupUserId,
-    order.buyer_id,
-    farmerCoords,
-    buyerCoords,
-    admin
-  );
-
   const listingObj = Array.isArray(order.listing)
     ? order.listing[0]
     : order.listing;
   const crop = listingObj?.crop ?? poolObj?.crop ?? "Produce";
 
-  const consolidation = buildConsolidation(
+  const transportCostPerKg = Number(order.logistics_cost_per_kg || 0);
+  const transportCostTotal = Number(
+    order.transport_cost_total ??
+      transportCostPerKg * Number(order.quantity_kg)
+  );
+  const mainOrder = {
+    id: order.id,
+    crop,
+    quantityKg: Number(order.quantity_kg),
+    farmerCoords,
+    buyerCoords,
+    farmerName: farmer.full_name,
+    buyerName: buyer.business_name || buyer.full_name,
+    status: order.status,
+    transportMode: order.transport_mode,
+    transporterId: order.transporter_id,
+    transportCostTotal,
+  };
+  const nearbyOrders = await findNearbyOrders(mainOrder, admin);
+  const consolidation = await buildConsolidation(
     {
       id: order.id,
       crop,
       quantityKg: Number(order.quantity_kg),
       farmerCoords,
       buyerCoords,
-      routeKm: route.distanceKm,
       farmerName: farmer.full_name,
       buyerName: buyer.business_name || buyer.full_name,
+      transportCostTotal,
     },
-    nearbyOrders,
-    vehicle
+    nearbyOrders
   );
-
-  const transportCostPerKg = Number(order.logistics_cost_per_kg || 0);
-  const transportCostTotal = transportCostPerKg * Number(order.quantity_kg);
 
   return {
     order: {
@@ -270,8 +343,20 @@ export async function getOrderRouteContext(
       quantityKg: Number(order.quantity_kg),
       pricePerKg: Number(order.final_price_per_kg),
       grossAmount: Number(order.gross_amount),
+      netRealizationPerKg:
+        order.net_realization_per_kg == null
+          ? null
+          : Number(order.net_realization_per_kg),
+      netRealizationTotal:
+        order.net_amount == null ? null : Number(order.net_amount),
+      buyerTotalPayable:
+        order.buyer_total_payable == null
+          ? null
+          : Number(order.buyer_total_payable),
       logisticsCostPerKg: transportCostPerKg,
+      transportMode: order.transport_mode,
       distanceKm: route.distanceKm,
+      updatedAt: order.updated_at,
     },
     farmer: {
       id: farmer.id,
@@ -287,7 +372,7 @@ export async function getOrderRouteContext(
       state: buyer.state,
       coords: buyerCoords,
     },
-    route: { ...route, vehicle },
+    route: { ...route, vehicle: order.vehicle_type || vehicle },
     transportCostTotal,
     perKgTransport: transportCostPerKg,
     nearbyOrders,
@@ -300,21 +385,35 @@ export async function getOrderRouteContext(
    ======================================================================== */
 
 async function findNearbyOrders(
-  excludeOrderId: string,
-  farmerId: string,
-  buyerId: string,
-  farmerCoords: GeoPoint,
-  buyerCoords: GeoPoint,
+  main: {
+    id: string;
+    status: string;
+    transportMode: string | null;
+    transporterId: string | null;
+    farmerCoords: GeoPoint;
+    buyerCoords: GeoPoint;
+  },
   admin: ReturnType<typeof createAdminClient>
 ): Promise<NearbyOrder[]> {
+  if (
+    !["escrow_paid", "in_transit"].includes(main.status) ||
+    main.transportMode !== "krishilink" ||
+    !main.transporterId
+  ) {
+    return [];
+  }
+
   const { data: orders } = await admin
     .from("transactions")
     .select(
-      "id, farmer_id, buyer_id, quantity_kg, status, pool_id, listing:listings(crop), pool:fpo_pools(crop, fpo_id)"
+      "id, farmer_id, buyer_id, quantity_kg, status, pool_id, transport_mode, transporter_id, transport_cost_total, logistics_cost_per_kg, listing:listings(crop), pool:fpo_pools(crop, fpo_id)"
     )
-    .in("status", ["escrow_paid", "in_transit", "delivered"])
-    .neq("id", excludeOrderId)
-    .limit(20);
+    .in("status", ["escrow_paid", "in_transit"])
+    .eq("transport_mode", "krishilink")
+    .eq("transporter_id", main.transporterId)
+    .neq("id", main.id)
+    .order("created_at", { ascending: true })
+    .limit(50);
 
   if (!orders || orders.length === 0) return [];
 
@@ -350,18 +449,22 @@ async function findNearbyOrders(
       buyer.id
     );
 
-    const farmerDist = haversineKm(farmerCoords, fCoords);
-    const buyerDist = haversineKm(buyerCoords, bCoords);
-    const sameCorridor = farmerDist < 50 || buyerDist < 50;
+    const farmerDist = haversineKm(main.farmerCoords, fCoords);
+    const buyerDist = haversineKm(main.buyerCoords, bCoords);
+    const sameCorridor = farmerDist < 50 && buyerDist < 50;
 
     if (!sameCorridor) continue;
 
-        const listingObj = Array.isArray(o.listing) ? o.listing[0] : o.listing;
+    const listingObj = Array.isArray(o.listing) ? o.listing[0] : o.listing;
     nearby.push({
       id: o.id,
       shortId: o.id.slice(0, 8),
       crop: listingObj?.crop ?? p?.crop ?? "Produce",
       quantityKg: Number(o.quantity_kg),
+      transportCostTotal: Number(
+        o.transport_cost_total ??
+          Number(o.logistics_cost_per_kg || 0) * Number(o.quantity_kg)
+      ),
       status: o.status,
       farmerName: farmer.full_name,
       buyerName: buyer.business_name || buyer.full_name,
@@ -369,7 +472,7 @@ async function findNearbyOrders(
       buyerCoords: bCoords,
       sameCorridor,
       distanceFromThisOrderKm: Number(
-        Math.min(farmerDist, buyerDist).toFixed(1)
+        Math.max(farmerDist, buyerDist).toFixed(1)
       ),
     });
   }
@@ -382,101 +485,90 @@ async function findNearbyOrders(
    Consolidation builder
    ======================================================================== */
 
-function buildConsolidation(
+async function buildConsolidation(
   main: {
     id: string;
     crop: string;
     quantityKg: number;
     farmerCoords: GeoPoint;
     buyerCoords: GeoPoint;
-    routeKm: number;
     farmerName: string;
     buyerName: string;
+    transportCostTotal: number;
   },
-  nearby: NearbyOrder[],
-  vehicle: string
-): ConsolidationSuggestion | null {
-  if (nearby.length === 0) return null;
+  nearby: NearbyOrder[]
+): Promise<ConsolidationSuggestion | null> {
+  if (
+    nearby.length === 0 ||
+    !Number.isFinite(main.quantityKg) ||
+    main.quantityKg <= 0 ||
+    main.quantityKg > VEHICLE_CAPACITY.Truck
+  ) {
+    return null;
+  }
 
-  const capacity = VEHICLE_CAPACITY[vehicle] || 500;
-
-  const allOrders = [
+  const candidates = [
     {
       id: main.id,
+      crop: main.crop,
       kg: main.quantityKg,
       farmerCoords: main.farmerCoords,
       buyerCoords: main.buyerCoords,
       farmerName: main.farmerName,
       buyerName: main.buyerName,
+      transportCostTotal: main.transportCostTotal,
     },
     ...nearby.map((n) => ({
       id: n.id,
+      crop: n.crop,
       kg: n.quantityKg,
       farmerCoords: n.farmerCoords,
       buyerCoords: n.buyerCoords,
       farmerName: n.farmerName,
       buyerName: n.buyerName,
+      transportCostTotal: n.transportCostTotal,
     })),
   ];
 
-  let sharedQty = 0;
-  const canShare: typeof allOrders = [];
-  for (const o of allOrders) {
-    if (sharedQty + o.kg <= capacity) {
-      canShare.push(o);
-      sharedQty += o.kg;
+  let sharedQty = main.quantityKg;
+  const canShare = [candidates[0]];
+  for (const candidate of candidates.slice(1)) {
+    if (
+      Number.isFinite(candidate.kg) &&
+      candidate.kg > 0 &&
+      sharedQty + candidate.kg <= VEHICLE_CAPACITY.Truck
+    ) {
+      canShare.push(candidate);
+      sharedQty += candidate.kg;
     }
   }
+  if (canShare.length < 2) return null;
 
-  if (canShare.length < 2) {
-    return {
-      canConsolidate: false,
-      sharedOrdersCount: 1,
-      sharedQuantityKg: main.quantityKg,
-      vehicle,
-      vehicleCapacityKg: capacity,
-      utilizationPercent: Math.round((main.quantityKg / capacity) * 100),
-      originalTotalCost: 0,
-      consolidatedTotalCost: 0,
-      savingsTotal: 0,
-      savingsPercent: 0,
-      savingsPerKg: 0,
-      combinedPolyline: [],
-      stops: [],
-    };
-  }
-
-  const stops: ConsolidationSuggestion["stops"] = [];
-  for (const o of canShare) {
-    stops.push({
-      kind: "pickup",
-      name: o.farmerName,
-      lat: o.farmerCoords.lat,
-      lng: o.farmerCoords.lng,
-      orderId: o.id,
-    });
-  }
-  for (const o of canShare) {
-    stops.push({
-      kind: "drop",
-      name: o.buyerName,
-      lat: o.buyerCoords.lat,
-      lng: o.buyerCoords.lng,
-      orderId: o.id,
-    });
-  }
-
-  let originalCost = 0;
-  for (const o of canShare) {
-    const d = haversineKm(o.farmerCoords, o.buyerCoords) * 1.3;
-    originalCost += d * 2;
-  }
-
-  const combinedDistanceKm = estimateChainDistance(stops);
-  const ratePerKm = 18;
-
-  const originalTotalCost = originalCost * ratePerKm;
-  const consolidatedTotalCost = combinedDistanceKm * ratePerKm;
+  const vehicle =
+    sharedQty <= VEHICLE_CAPACITY.Tempo
+      ? "Tempo"
+      : sharedQty <= VEHICLE_CAPACITY["Mini Truck"]
+        ? "Mini Truck"
+        : "Truck";
+  const capacity = VEHICLE_CAPACITY[vehicle];
+  const stops = orderStopsByNearestFeasible(canShare, capacity);
+  const combinedRoute = await computeMultiStopRoute(
+    stops.map(({ lat, lng }) => ({ lat, lng })),
+    vehicle
+  );
+  const individualDistanceKm = canShare.reduce(
+    (sum, order) =>
+      sum + haversineKm(order.farmerCoords, order.buyerCoords) * 1.3,
+    0
+  );
+  const originalTotalCost = canShare.reduce(
+    (sum, order) => sum + order.transportCostTotal,
+    0
+  );
+  const effectiveRatePerKm =
+    individualDistanceKm > 0 ? originalTotalCost / individualDistanceKm : 0;
+  const consolidatedTotalCost =
+    combinedRoute.distanceKm * effectiveRatePerKm;
   const savingsTotal = originalTotalCost - consolidatedTotalCost;
   const savingsPercent =
     originalTotalCost > 0
@@ -497,32 +589,94 @@ function buildConsolidation(
     savingsTotal: Math.round(savingsTotal),
     savingsPercent,
     savingsPerKg,
-    combinedPolyline: stops.map((s) => [s.lat, s.lng]),
+    routeKm: combinedRoute.distanceKm,
+    routeDurationMin: combinedRoute.durationMin,
+    routeSource: combinedRoute.source,
+    combinedPolyline: combinedRoute.polyline,
     stops,
   };
 }
 
-function estimateChainDistance(
-  stops: ConsolidationSuggestion["stops"]
-): number {
-  if (stops.length < 2) return 0;
-  const remaining = [...stops];
-  let total = 0;
-  let current = remaining.shift()!;
-  while (remaining.length > 0) {
-    let closest = 0;
-    let minDist = Infinity;
-    for (let i = 0; i < remaining.length; i++) {
-      const d = haversineKm(current, remaining[i]);
-      if (d < minDist) {
-        minDist = d;
-        closest = i;
-      }
+function orderStopsByNearestFeasible(
+  orders: Array<{
+    id: string;
+    crop: string;
+    kg: number;
+    farmerCoords: GeoPoint;
+    buyerCoords: GeoPoint;
+    farmerName: string;
+    buyerName: string;
+  }>,
+  capacity: number
+): ConsolidationSuggestion["stops"] {
+  const first = orders[0];
+  const stops: ConsolidationSuggestion["stops"] = [
+    {
+      kind: "pickup",
+      name: first.farmerName,
+      lat: first.farmerCoords.lat,
+      lng: first.farmerCoords.lng,
+      orderId: first.id,
+      crop: first.crop,
+    },
+  ];
+  const picked = new Set([first.id]);
+  const delivered = new Set<string>();
+  let current = first.farmerCoords;
+  let loadKg = first.kg;
+
+  while (delivered.size < orders.length) {
+    const available = [
+      ...orders
+        .filter(
+          (order) => !picked.has(order.id) && loadKg + order.kg <= capacity
+        )
+        .map((order) => ({
+          kind: "pickup" as const,
+          order,
+          point: order.farmerCoords,
+        })),
+      ...orders
+        .filter(
+          (order) => picked.has(order.id) && !delivered.has(order.id)
+        )
+        .map((order) => ({
+          kind: "drop" as const,
+          order,
+          point: order.buyerCoords,
+        })),
+    ];
+    if (available.length === 0) break;
+
+    available.sort(
+      (a, b) =>
+        haversineKm(current, a.point) - haversineKm(current, b.point) ||
+        a.order.id.localeCompare(b.order.id) ||
+        a.kind.localeCompare(b.kind)
+    );
+    const next = available[0];
+    stops.push({
+      kind: next.kind,
+      name:
+        next.kind === "pickup"
+          ? next.order.farmerName
+          : next.order.buyerName,
+      lat: next.point.lat,
+      lng: next.point.lng,
+      orderId: next.order.id,
+      crop: next.order.crop,
+    });
+
+    if (next.kind === "pickup") {
+      picked.add(next.order.id);
+      loadKg += next.order.kg;
+    } else {
+      delivered.add(next.order.id);
+      loadKg -= next.order.kg;
     }
-    total += minDist * 1.3;
-    current = remaining.splice(closest, 1)[0];
+    current = next.point;
   }
-  return total;
+  return stops;
 }
 
 function haversineKm(a: GeoPoint, b: GeoPoint): number {

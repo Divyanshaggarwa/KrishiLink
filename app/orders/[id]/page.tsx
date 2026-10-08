@@ -38,7 +38,7 @@ export default async function OrderMapPage({
       profile={profile}
       showBack={true}
       title="Order route"
-      subtitle="Live delivery route, transport cost, and consolidation opportunities."
+      subtitle="Per-order road route, net realization, buyer transport costs, and status updates. Vehicle GPS tracking is not enabled."
     >
       <div className="mb-6">
         <Link

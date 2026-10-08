@@ -25,7 +25,7 @@ export default async function BuyerOrdersPage() {
   const { data: orders } = await supabase
     .from("transactions")
     .select(
-      "id, listing_id, pool_id, offer_id, farmer_id, final_price_per_kg, quantity_kg, gross_amount, buyer_total_payable, escrow_amount_paid, logistics_cost_per_kg, distance_km, vehicle_type, status, created_at"
+      "id, listing_id, pool_id, offer_id, farmer_id, final_price_per_kg, quantity_kg, gross_amount, net_realization_per_kg, net_amount, buyer_total_payable, escrow_amount_paid, logistics_cost_per_kg, transport_cost_total, transport_mode, distance_km, vehicle_type, status, created_at"
     )
     .eq("buyer_id", profile.id)
     .order("created_at", { ascending: false });
@@ -209,7 +209,7 @@ export default async function BuyerOrdersPage() {
                 </div>
 
                 {/* Details */}
-                <div className="mt-5 grid gap-4 md:grid-cols-4">
+                <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                   <Field
                     label="Deal price"
                     value={`₹${Number(o.final_price_per_kg).toFixed(2)}/kg`}
@@ -225,6 +225,34 @@ export default async function BuyerOrdersPage() {
                       "en-IN"
                     )}`}
                     accent
+                  />
+                  <Field
+                    label="Farmer net realization"
+                    value={
+                      o.net_realization_per_kg == null
+                        ? "Not recorded"
+                        : `₹${Number(o.net_realization_per_kg).toFixed(2)}/kg`
+                    }
+                  />
+                  <Field
+                    label="Farmer take-home"
+                    value={
+                      o.net_amount == null
+                        ? "Not recorded"
+                        : `₹${Number(o.net_amount).toLocaleString("en-IN")}`
+                    }
+                  />
+                  <Field
+                    label="Transport charged to buyer"
+                    value={
+                      o.transport_mode === "krishilink"
+                        ? `₹${Number(
+                            o.transport_cost_total ??
+                              Number(o.logistics_cost_per_kg ?? 0) *
+                                Number(o.quantity_kg)
+                          ).toLocaleString("en-IN")}`
+                        : "No KrishiLink transport charge"
+                    }
                   />
                 </div>
 

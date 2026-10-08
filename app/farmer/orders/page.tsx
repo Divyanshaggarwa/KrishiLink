@@ -13,7 +13,7 @@ export default async function FarmerOrdersPage() {
   const { data: orders } = await supabase
     .from("transactions")
     .select(
-      "id, listing_id, offer_id, buyer_id, final_price_per_kg, quantity_kg, net_realization_per_kg, net_amount, gross_amount, logistics_cost_per_kg, transaction_cost_per_kg, distance_km, vehicle_type, status, created_at"
+      "id, listing_id, offer_id, buyer_id, final_price_per_kg, quantity_kg, net_realization_per_kg, net_amount, gross_amount, logistics_cost_per_kg, transport_cost_total, transport_mode, transaction_cost_per_kg, distance_km, vehicle_type, status, created_at"
     )
     .eq("farmer_id", profile.id)
     .order("created_at", { ascending: false });
@@ -119,7 +119,7 @@ export default async function FarmerOrdersPage() {
                   </span>
                 </div>
 
-                <div className="mt-5 grid gap-4 md:grid-cols-4">
+                <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
                   <Field
                     label="Deal price"
                     value={`₹${Number(o.final_price_per_kg).toFixed(2)}/kg`}
@@ -134,6 +134,18 @@ export default async function FarmerOrdersPage() {
                     label="Your take-home"
                     value={`₹${Number(o.net_amount).toLocaleString("en-IN")}`}
                     accent
+                  />
+                  <Field
+                    label="Transport charged to buyer"
+                    value={
+                      o.transport_mode === "krishilink"
+                        ? `₹${Number(
+                            o.transport_cost_total ??
+                              Number(o.logistics_cost_per_kg ?? 0) *
+                                Number(o.quantity_kg)
+                          ).toLocaleString("en-IN")}`
+                        : "No KrishiLink transport charge"
+                    }
                   />
                 </div>
 
