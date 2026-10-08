@@ -47,7 +47,7 @@ async function getAdvanceWalletState(
     .from("wallet_transactions")
     .select("kind, amount")
     .eq("reference_id", orderId)
-    .in("kind", ["advance_received", "pool_advance_received", "escrow_locked"]);
+    .in("kind", ["escrow_paid", "escrow_locked"]);
 
   query = isFpo
     ? query.eq("fpo_id", accountId).eq("wallet_type", "fpo")
@@ -63,7 +63,7 @@ async function getAdvanceWalletState(
   }
 
   const hasAvailableAdvance = (data ?? []).some((entry) =>
-    ["advance_received", "pool_advance_received"].includes(entry.kind)
+    entry.kind === "escrow_paid"
   );
   const lockedAdvance = (data ?? [])
     .filter((entry) => entry.kind === "escrow_locked")
@@ -405,7 +405,7 @@ export async function payEscrowFromWallet(
     const { error: creditError } = await admin.rpc("fpo_wallet_credit", {
       p_fpo_id: fpoId,
       p_amount: farmerCredit30,
-      p_kind: "pool_advance_received",
+      p_kind: "escrow_paid",
       p_reference_id: order.id,
       p_description: `30% advance · ${crop} pool`,
     });
@@ -424,7 +424,7 @@ export async function payEscrowFromWallet(
     const { error: creditError } = await admin.rpc("wallet_credit", {
       p_user_id: order.farmer_id,
       p_amount: farmerCredit30,
-      p_kind: "advance_received",
+      p_kind: "escrow_paid",
       p_reference_id: order.id,
       p_description: `30% order advance · ${crop}`,
     });
@@ -599,7 +599,7 @@ export async function confirmDeliveryFromWallet(
     const { error: creditError } = await admin.rpc("fpo_wallet_credit", {
       p_fpo_id: fpoId,
       p_amount: farmerCreditFinal,
-      p_kind: "pool_received",
+      p_kind: "payout_received",
       p_reference_id: order.id,
       p_description: `${Math.round(farmerFinalShare * 100)}% final · ${crop} pool`,
     });
